@@ -102,3 +102,20 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+transformer-xl/data
+transformer-xl/pytorch/LM-TFM*
+
+# vim
+*.swp
+
+# pickle
+*.pt
+
+# data
+*.data
+
+*.tar
+conv_transformer/data
+dynamic_sparse/data
+dynamic_sparse/runs/*
