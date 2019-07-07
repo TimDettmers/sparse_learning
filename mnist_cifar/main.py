@@ -11,12 +11,14 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay, get_mnist_dataloaders, get_cifar10_dataloaders
+from sparselearning.core import Masking, CosineDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
+from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders
 
 from apex.fp16_utils import FP16_Optimizer
 
 cudnn.benchmark = True
+cudnn.deterministic = True
 
 if not os.path.exists('./models'): os.mkdir('./models')
 logging.basicConfig(filename='./mnist_cifar.log',
@@ -112,8 +114,7 @@ def main():
                         help='SGD momentum (default: 0.5)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
+    parser.add_argument('--seed', type=int, default=17, metavar='S', help='random seed (default: 17)')
     parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-model', type=str, default='./models/model.pt', help='For Saving the current Model')
@@ -140,7 +141,7 @@ def main():
     print_and_log(args)
     torch.manual_seed(args.seed)
     for i in range(args.iterations):
-        print_and_log("\nIteration start: {0}/{1}\n".format(i, args.iterations))
+        print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iterations))
 
         if args.data == 'mnist':
             train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
@@ -217,7 +218,7 @@ def main():
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1}.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
         evaluate(args, model, device, test_loader)
-        print_and_log("\nIteration end: {0}/{1}\n".format(i, args.iterations))
+        print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iterations))
 
 if __name__ == '__main__':
    main()

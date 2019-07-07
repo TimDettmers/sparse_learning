@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from torchvision import datasets, transforms
 from scipy.sparse import coo_matrix, csr_matrix
 import numpy as np
 import math
@@ -16,7 +15,7 @@ import time
 from matplotlib import pyplot as plt
 
 def add_sparse_args(parser):
-    parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and gradient_neuron.')
+    parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
     parser.add_argument('--death', type=str, default='magnitude', help='Death mode / pruning mode. Choose from: magnitude, SET, threshold.')
     parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, magnitude, nonzeros, or none.')
     parser.add_argument('--death-rate', type=float, default=0.50, help='The pruning rate / death rate.')
@@ -53,7 +52,7 @@ class LinearDecay(object):
 
 class Masking(object):
     def __init__(self, optimizer, death_rate=0.3, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001):
-        growth_modes = ['random', 'momentum', 'gradient_neuron']
+        growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
             print('Supported modes are:', str(growth_modes))
@@ -63,6 +62,16 @@ class Masking(object):
         self.growth_death_ratio = growth_death_ratio
         self.redistribution_mode = redistribution_mode
         self.death_rate_decay = death_rate_decay
+
+        self.death_funcs = {}
+        self.death_funcs['magnitude'] = self.magnitude_death
+        self.death_funcs['SET'] = self.magnitude_and_negativity_death
+        self.death_funcs['threshold'] = self.threshold_death
+
+        self.growth_funcs = {}
+        self.growth_funcs['random'] = self.random_growth
+        self.growth_funcs['momentum'] = self.momentum_growth
+        self.growth_funcs['momentum_neuron'] = self.momentum_neuron_growth
 
         self.masks = {}
         self.modules = []
@@ -172,7 +181,6 @@ class Masking(object):
         self.reset_momentum()
 
     def step(self):
-        self.sample_gradient()
         self.optimizer.step()
         self.apply_mask()
         self.death_rate_decay.step()
@@ -183,7 +191,7 @@ class Masking(object):
 
         if self.prune_every_k_steps is not None:
             if self.steps % self.prune_every_k_steps == 0:
-                self.truncate_weights(partial_name=None)
+                self.truncate_weights()
                 self.print_nonzero_counts()
                 self.reset_momentum()
 
@@ -232,9 +240,9 @@ class Masking(object):
                 if name in self.masks:
                     tensor.data = tensor.data*self.masks[name]
 
-    def truncate_weights(self, partial_name=None):
-        self.gather_statistics(partial_name)
-        name2regrowth = self.calc_growth_redistribution(partial_name)
+    def truncate_weights(self):
+        self.gather_statistics()
+        name2regrowth = self.calc_growth_redistribution()
 
         total_nonzero_new = 0
         total_removed = 0
@@ -243,18 +251,14 @@ class Masking(object):
         else:
             for module in self.modules:
                 for name, weight in module.named_parameters():
-                    if partial_name is not None:
-                        if isinstance(partial_name, set):
-                            if not any([p in name for p in partial_name]): continue
-                        elif partial_name not in name: continue
                     if name not in self.masks: continue
                     mask = self.masks[name]
 
                     # death
                     if self.death_mode == 'magnitude':
-                        new_mask = self.magnitude_death(weight, name)
+                        new_mask = self.magnitude_death(mask, weight, name)
                     elif self.death_mode == 'SET':
-                        new_mask = self.magnitude_and_negativity_death(weight, name)
+                        new_mask = self.magnitude_and_negativity_death(mask, weight, name)
                     elif self.death_mode == 'threshold':
                         new_mask = self.threshold_death(mask, weight, name)
 
@@ -265,7 +269,7 @@ class Masking(object):
 
 
         if self.growth_mode == 'global_momentum':
-            total_nonzero_new = self.global_gradient_growth(total_removed + self.adjusted_growth)
+            total_nonzero_new = self.global_momentum_growth(total_removed + self.adjusted_growth)
         else:
             if self.death_mode == 'threshold':
                 expected_killed = sum(name2regrowth.values())
@@ -277,10 +281,6 @@ class Masking(object):
 
             for module in self.modules:
                 for name, weight in module.named_parameters():
-                    if partial_name is not None:
-                        if isinstance(partial_name, set):
-                            if not any([p in name for p in partial_name]): continue
-                        elif partial_name not in name: continue
                     if name not in self.masks: continue
                     new_mask = self.masks[name].data.byte()
 
@@ -300,16 +300,13 @@ class Masking(object):
                     else:
                         total_regrowth = math.floor(name2regrowth[name]*self.growth_death_ratio)
 
-
-
-
                     # growth
                     if self.growth_mode == 'random':
                         new_mask = self.random_growth(new_mask, total_regrowth)
                     elif self.growth_mode == 'momentum':
-                        new_mask = self.gradient_growth(name, new_mask, total_regrowth, weight)
-                    elif self.growth_mode == 'gradient_neuron':
-                        new_mask = self.gradient_neuron_growth(name, new_mask, total_regrowth, weight)
+                        new_mask = self.momentum_growth(name, new_mask, total_regrowth, weight)
+                    elif self.growth_mode == 'momentum_neuron':
+                        new_mask = self.momentum_neuron_growth(name, new_mask, total_regrowth, weight)
 
 
                     new_nonzero = new_mask.sum().item()
@@ -320,36 +317,20 @@ class Masking(object):
                     total_nonzero_new += new_nonzero
         self.apply_mask()
 
-        print(self.total_nonzero, self.baseline_nonzero, self.adjusted_growth)
-        if self.baseline_nonzero is None: self.baseline_nonzero = self.total_nonzero
         # Some growth techniques and redistribution are probablistic and we might not grow enough weights or too much weights
         # Here we run an exponential smoothing over (death-growth) residuals to adjust future growth
         self.adjustments.append(self.baseline_nonzero - total_nonzero_new)
         self.adjusted_growth = 0.25*self.adjusted_growth + (0.75*(self.baseline_nonzero - total_nonzero_new)) + np.mean(self.adjustments)
-
-
+        print(self.total_nonzero, self.baseline_nonzero, self.adjusted_growth)
 
         if self.total_nonzero > 0:
             print('old, new nonzero count:', self.total_nonzero, total_nonzero_new, self.adjusted_growth)
-
-        # adjust death rate
-        #expected_variance = 1./len(self.name2variance)
-        #for name, var in self.name2variance.items():
-            #self.name2death_rate[name] *= 0.99
-            #if var > expected_variance:
-                #self.name2death_rate[name] *= 0.98
-
-            #if var < expected_variance:
-                #self.name2death_rate[name] *= 1.02
-
-
-
 
     '''
                     REDISTRIBUTION
     '''
 
-    def gather_statistics(self, partial_name):
+    def gather_statistics(self):
         self.name2nonzeros = {}
         self.name2zeros = {}
         self.name2variance = {}
@@ -361,27 +342,10 @@ class Masking(object):
         for module in self.modules:
             for name, tensor in module.named_parameters():
                 if name not in self.masks: continue
-                if partial_name is not None:
-                    if isinstance(partial_name, set):
-                        if not any([p in name for p in partial_name]): continue
-                    elif partial_name not in name: continue
                 mask = self.masks[name]
                 if self.redistribution_mode == 'momentum':
-                    #adam_grad = self.optimizer.state[tensor]['exp_avg']
-                    #if hasattr(self.optimizer, '_get_param_groups'):
-                        #print('groups!')
-                    #print(list(self.optimizer._get_state()[tensor]))
-                    if 'exp_avg' in self.optimizer.state[tensor]:
-                        adam_m1 = self.optimizer.state[tensor]['exp_avg']
-                        adam_m2 = self.optimizer.state[tensor]['exp_avg_sq']
-                        grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
-                    elif 'momentum_buffer' in self.optimizer.state[tensor]:
-                        grad = self.optimizer.state[tensor]['momentum_buffer']
-
-                    #self.name2variance[name] = torch.abs(tensor.grad*tensor)[mask.byte()].mean().item()#/(V1val*V2val)
-                    #self.name2variance[name] = torch.abs(grad[mask==0]).mean().item()#/(V1val*V2val)
+                    grad = self.get_momentum_for_weight(tensor)
                     self.name2variance[name] = torch.abs(grad[mask.byte()]).mean().item()#/(V1val*V2val)
-                    #print(name, self.name2variance[name])
                 elif self.redistribution_mode == 'magnitude':
                     self.name2variance[name] = torch.abs(tensor)[mask.byte()].mean().item()
                 elif self.redistribution_mode == 'nonzeros':
@@ -410,16 +374,7 @@ class Masking(object):
                 self.total_nonzero += self.name2nonzeros[name]
                 self.total_zero += self.name2zeros[name]
 
-        #val = np.array(list(self.name2variance.values()))
-        #idx = np.arange(val.size)
-        #np.random.shuffle(idx)
-        #for i, name in enumerate(self.name2variance):
-        #    print(self.name2variance[name], val[idx[i]])
-        #    self.name2variance[name] = val[idx[i]]
-
-
-
-    def calc_growth_redistribution(self, partial_name):
+    def calc_growth_redistribution(self):
         num_overgrowth = 0
         total_overgrowth = 0
         residual = 0
@@ -434,10 +389,6 @@ class Masking(object):
         while residual > 0 and i < 1000:
             residual = 0
             for name in self.name2variance:
-                if partial_name is not None:
-                    if isinstance(partial_name, set):
-                        if not any([p in name for p in partial_name]): continue
-                    elif partial_name not in name: continue
                 #death_rate = min(self.name2death_rate[name], max(0.05, (self.name2zeros[name]/float(self.masks[name].numel()))))
                 sparsity = self.name2zeros[name]/float(self.masks[name].numel())
                 death_rate = self.name2death_rate[name]
@@ -483,7 +434,7 @@ class Masking(object):
     def threshold_death(self, mask, weight, name):
         return (torch.abs(weight.data) > self.threshold)
 
-    def magnitude_death(self, weight, name):
+    def magnitude_death(self, mask, weight, name):
         sparsity = self.name2zeros[name]/float(self.masks[name].numel())
         death_rate = self.name2death_rate[name]
         if sparsity < 0.2:
@@ -540,7 +491,7 @@ class Masking(object):
         return int(total_removed)
 
 
-    def global_gradient_growth(self, total_regrowth):
+    def global_momentum_growth(self, total_regrowth):
         togrow = total_regrowth
         total_grown = 0
         last_grown = 0
@@ -552,13 +503,7 @@ class Masking(object):
                     if name not in self.masks: continue
 
                     new_mask = self.masks[name]
-                    if 'exp_avg' in self.optimizer.state[weight]:
-                        adam_m1 = self.optimizer.state[weight]['exp_avg']
-                        adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
-                        grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
-                    elif 'momentum_buffer' in self.optimizer.state[weight]:
-                        grad = self.optimizer.state[weight]['momentum_buffer']
-
+                    grad = self.get_momentum_for_weight(weight)
                     grad = grad*(new_mask==0).float()
                     possible = (grad !=0.0).sum().item()
                     total_possible += possible
@@ -582,20 +527,14 @@ class Masking(object):
                 if name not in self.masks: continue
 
                 new_mask = self.masks[name]
-                if 'exp_avg' in self.optimizer.state[weight]:
-                    adam_m1 = self.optimizer.state[weight]['exp_avg']
-                    adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
-                    grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
-                elif 'momentum_buffer' in self.optimizer.state[weight]:
-                    grad = self.optimizer.state[weight]['momentum_buffer']
-
+                grad = self.get_momentum_for_weight(weight)
                 grad = grad*(new_mask==0).float()
                 self.masks[name][:] = (new_mask.byte() | (torch.abs(grad.data) > self.growth_threshold)).float()
                 total_new_nonzeros += new_mask.sum().item()
         return total_new_nonzeros
 
 
-    def magnitude_and_negativity_death(self, weight, name):
+    def magnitude_and_negativity_death(self, mask, weight, name):
         num_remove = math.ceil(self.name2death_rate[name]*self.name2nonzeros[name])
         num_zeros = self.name2zeros[name]
 
@@ -628,39 +567,23 @@ class Masking(object):
                     GROWTH
     '''
 
-    def random_growth(self, new_mask, total_regrowth):
+    def random_growth(self, name, new_mask, total_regrowth, weight):
         n = (new_mask==0).sum().item()
         if n == 0: return new_mask
         expeced_growth_probability = (total_regrowth/n)
         new_weights = torch.rand(new_mask.shape).cuda() < expeced_growth_probability
         return new_mask.byte() | new_weights
 
-    def gradient_growth(self, name, new_mask, total_regrowth, weight):
-        if 'exp_avg' in self.optimizer.state[weight]:
-            adam_m1 = self.optimizer.state[weight]['exp_avg']
-            adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
-            grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
-        elif 'momentum_buffer' in self.optimizer.state[weight]:
-            grad = self.optimizer.state[weight]['momentum_buffer']
-
+    def momentum_growth(self, name, new_mask, total_regrowth, weight):
+        grad = self.get_momentum_for_weight(weight)
         grad = grad*(new_mask==0).float()
-        #y, idx = torch.sort(torch.abs(grad[new_mask==0]).flatten())
         y, idx = torch.sort(torch.abs(grad).flatten(), descending=True)
-        threshold = y[total_regrowth].item()
-        #threshold = y[-(total_regrowth-1)].item()
         new_mask.data.view(-1)[idx[:total_regrowth]] = 1.0
-        #new_mask = new_mask | (torch.abs(grad) > threshold)
 
         return new_mask
 
-
-    def gradient_neuron_growth(self, name, new_mask, total_regrowth, weight):
-        if 'exp_avg' in self.optimizer.state[weight]:
-            adam_m1 = self.optimizer.state[weight]['exp_avg']
-            adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
-            grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
-        elif 'momentum_buffer' in self.optimizer.state[weight]:
-            grad = self.optimizer.state[weight]['momentum_buffer']
+    def momentum_neuron_growth(self, name, new_mask, total_regrowth, weight):
+        grad = self.get_momentum_for_weight(weight)
 
         M = torch.abs(grad)
         if len(M.shape) == 2: sum_dim = [1]
@@ -689,6 +612,14 @@ class Masking(object):
     '''
                 UTILITY
     '''
+    def get_momentum_for_weight(self, weight):
+        if 'exp_avg' in self.optimizer.state[weight]:
+            adam_m1 = self.optimizer.state[weight]['exp_avg']
+            adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
+            grad = adam_m1/(torch.sqrt(adam_m2) + 1e-08)
+        elif 'momentum_buffer' in self.optimizer.state[weight]:
+            grad = self.optimizer.state[weight]['momentum_buffer']
+        return grad
 
     def print_nonzero_counts(self):
         for module in self.modules:
@@ -722,249 +653,11 @@ class Masking(object):
                 weights = list(self.optimizer.state[tensor])
                 for w in weights:
                     if w == 'momentum_buffer':
+                        # momentum
                         self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
-                    elif w == 'step_size':
-                        #set to learning rate
-                        self.optimizer.state[self.weight]['step_size'][indices] = optimizer.defaults['lr']
-                    elif w == 'prev':
-                        self.optimizer.state[self.weight]['prev'][indices] = 0.0
-                    # TODO: Memory leak
                     elif w == 'square_avg' or \
                         w == 'exp_avg' or \
                         w == 'exp_avg_sq' or \
                         w == 'exp_inf':
-                        #use average of all for very rough estimate of stable value
-                        #self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w])
-                        #self.optimizer.state[tensor][w] = self.optimizer.state[tensor][w]*mask
+                        # Adam
                         self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
-                        #print(self.optimizer.state[tensor][w][mask==0].sum())
-                    elif w == 'acc_delta':
-                        #set to learning rate
-                        self.optimizer.state[self.weight]['step_size'][indices] = 0.0
-                    #elif buffer == ''
-
-def plot_class_feature_histograms(args, model, device, test_loader, optimizer):
-    model.eval()
-    agg = {}
-    num_classes = 10
-    feat_id = 0
-
-
-    for batch_idx, (data, target) in enumerate(test_loader):
-        if batch_idx % 100 == 0: print(batch_idx,'/', len(test_loader))
-        with torch.no_grad():
-            #if batch_idx == 10: break
-            data, target = data.to(device), target.to(device)
-            for cls in range(num_classes):
-                #print('=='*50)
-                #print('CLASS {0}'.format(cls))
-                model.t = target
-                sub_data = data[target == cls]
-
-                output = model(sub_data)
-
-                feats = model.feats
-                #print(len(feats))
-
-                if len(agg) == 0:
-                    for feat_id, feat in enumerate(feats):
-                        agg[feat_id] = []
-                        #print(feat.shape)
-                        for i in range(feat.shape[1]):
-                            agg[feat_id].append(np.zeros((num_classes,)))
-
-                for feat_id, feat in enumerate(feats):
-                    map_contributions = torch.abs(feat).sum([0, 2, 3])
-                    for map_id in range(map_contributions.shape[0]):
-                        #print(feat_id, map_id, cls)
-                        #print(len(agg), len(agg[feat_id]), len(agg[feat_id][map_id]), len(feats))
-                        agg[feat_id][map_id][cls] += map_contributions[map_id].item()
-
-                del model.feats[:]
-                model.feats = []
-
-    for feat_id, map_data in agg.items():
-        data = np.array(map_data)
-        #print(feat_id, data)
-        full_contribution = data.sum()
-        #print(full_contribution, data)
-        contribution_per_channel = ((1.0/full_contribution)*data.sum(1))
-        #print('pre', data.shape[0])
-        channels = data.shape[0]
-        #data = data[contribution_per_channel > 0.001]
-
-        channel_density = np.cumsum(np.sort(contribution_per_channel))
-        print(channel_density)
-        idx = np.argsort(contribution_per_channel)
-
-        threshold_idx = np.searchsorted(channel_density, 0.05)
-        print(data.shape, 'pre')
-        data = data[idx[threshold_idx:]]
-        print(data.shape, 'post')
-
-        #perc = np.percentile(contribution_per_channel[contribution_per_channel > 0.0], 10)
-        #print(contribution_per_channel, perc, feat_id)
-        #data = data[contribution_per_channel > perc]
-        #print(contribution_per_channel[contribution_per_channel < perc].sum())
-        #print('post', data.shape[0])
-        normed_data = np.max(data/np.sum(data,1).reshape(-1, 1), 1)
-        #normed_data = (data/np.sum(data,1).reshape(-1, 1) > 0.2).sum(1)
-        #counts, bins = np.histogram(normed_data, bins=4, range=(0, 4))
-        sparse = False
-        np.save('./results/alexnet_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
-        #np.save('./results/VGG_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
-        #np.save('./results/WRN-28-2_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
-        #plt.ylim(0, channels/2.0)
-        ##plt.hist(normed_data, bins=range(0, 5))
-        #plt.hist(normed_data, bins=[(i+20)/float(200) for i in range(180)])
-        #plt.xlim(0.1, 0.5)
-        #if sparse:
-        #    plt.title("Sparse: Conv2D layer {0}".format(feat_id))
-        #    plt.savefig('./output/feat_histo/layer_{0}_sp.png'.format(feat_id))
-        #else:
-        #    plt.title("Dense: Conv2D layer {0}".format(feat_id))
-        #    plt.savefig('./output/feat_histo/layer_{0}_d.png'.format(feat_id))
-        #plt.clf()
-
-class DatasetSplitter(torch.utils.data.Dataset):
-    def __init__(self,parent_dataset,split_start=-1,split_end= -1):
-        split_start = split_start if split_start != -1 else 0
-        split_end = split_end if split_end != -1 else len(parent_dataset)
-        assert split_start <= len(parent_dataset) - 1 and split_end <= len(parent_dataset) and     split_start < split_end , "invalid dataset split"
-
-        self.parent_dataset = parent_dataset
-        self.split_start = split_start
-        self.split_end = split_end
-
-    def __len__(self):
-        return self.split_end - self.split_start
-
-
-    def __getitem__(self,index):
-        assert index < len(self),"index out of bounds in split_datset"
-        return self.parent_dataset[index + self.split_start]
-
-
-def get_cifar10_dataloaders(args, validation_split=0.0):
-
-    #normalize = transforms.Normalize(mean=[x/255.0 for x in [125.3, 123.0, 113.9]],
-                               #std=[x/255.0 for x in [63.0, 62.1, 66.7]])
-
-    #train_transform = transforms.Compose([
-    #    transforms.RandomCrop(32, padding=4),
-    #    transforms.RandomHorizontalFlip(),
-    #    transforms.ToTensor(),
-    #    transforms.Normalize((0.4914, 0.4822, 0.4465),
-    #                         (0.2023, 0.1994, 0.2010)),
-    #])
-
-    normalize = transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                     (0.2023, 0.1994, 0.2010))
-
-    train_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Lambda(lambda x: F.pad(x.unsqueeze(0),
-                                                    (4,4,4,4),mode='reflect').squeeze()),
-        transforms.ToPILImage(),
-        transforms.RandomCrop(32),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        normalize,
-        ])
-
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        #transforms.normalize((0.4914, 0.4822, 0.4465),
-                             #(0.2023, 0.1994, 0.2010)),
-         normalize
-    ])
-
-    full_dataset = datasets.CIFAR10('_dataset', True, train_transform, download=True)
-    test_dataset = datasets.CIFAR10('_dataset', False, test_transform, download=False)
-
-
-
-    valid_loader = None
-    if validation_split > 0.0:
-        split = int(np.floor((1.0-validation_split) * len(full_dataset)))
-        train_dataset = DatasetSplitter(full_dataset,split_end=split)
-        val_dataset = DatasetSplitter(full_dataset,split_start=split)
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset,
-            args.batch_size,
-            num_workers=8,
-            pin_memory=True, shuffle=True)
-        valid_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            args.test_batch_size,
-            num_workers=2,
-            pin_memory=True)
-    else:
-        train_loader = torch.utils.data.DataLoader(
-            full_dataset,
-            args.batch_size,
-            num_workers=8,
-            pin_memory=True, shuffle=True)
-
-    print('Train loader length', len(train_loader))
-
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        args.test_batch_size,
-        shuffle=False,
-        num_workers=1,
-        pin_memory=True)
-
-    return train_loader, valid_loader, test_loader
-
-
-def get_mnist_dataloaders(args, validation_split=0.0):
-
-    normalize = transforms.Normalize((0.13057,),(0.308011,))
-    transform = transform=transforms.Compose([transforms.ToTensor(),normalize])
-
-    full_dataset = datasets.MNIST('../data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('../data', train=False, transform=transform)
-
-    dataset_size = len(full_dataset)
-    indices = list(range(dataset_size))
-    split = int(np.floor(validation_split * dataset_size))
-    #b = datasets.MNIST('../data', train=True, download=True)
-    #x = np.float32(b.data)
-    #x /= 255.
-
-    #train = x[split:]
-    #print(train.mean(), train.std())
-
-    valid_loader = None
-    if validation_split > 0.0:
-        split = int(np.floor((1.0-validation_split) * len(full_dataset)))
-        train_dataset = DatasetSplitter(full_dataset,split_end=split)
-        val_dataset = DatasetSplitter(full_dataset,split_start=split)
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset,
-            args.batch_size,
-            num_workers=8,
-            pin_memory=True, shuffle=True)
-        valid_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            args.test_batch_size,
-            num_workers=2,
-            pin_memory=True)
-    else:
-        train_loader = torch.utils.data.DataLoader(
-            full_dataset,
-            args.batch_size,
-            num_workers=8,
-            pin_memory=True, shuffle=True)
-
-    print('Train loader length', len(train_loader))
-
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        args.test_batch_size,
-        shuffle=False,
-        num_workers=1,
-        pin_memory=True)
-
-    return train_loader, valid_loader, test_loader
