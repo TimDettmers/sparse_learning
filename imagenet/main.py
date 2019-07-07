@@ -210,10 +210,10 @@ def train_net(args, logger_cls):
 
 
     decay = CosineDecay(args.death_rate, len(train_loader)*args.epochs)
-    mask = Masking(optimizer, death_mode=args.death_mode, death_rate_decay=decay, growth_mode=args.growth_mode, redistribution_mode=args.redistribution_mode)
+    mask = Masking(optimizer, death_mode=args.death, death_rate_decay=decay, growth_mode=args.growth, redistribution_mode=args.redistribution)
     model_and_loss.mask = mask
     if args.sparse:
-        mask.add_module(model_and_loss.model)
+        mask.add_module(model_and_loss.model, density=args.density)
 
 
     if args.evaluate:
@@ -354,7 +354,7 @@ def train_loop(args, model_and_loss, optimizer, lr_scheduler, train_loader, val_
             }, is_best, backup_filename=backup_filename)
 
         if args.sparse and epoch < epochs:
-            mask.at_end_of_epoch()
+            model_and_loss.mask.at_end_of_epoch()
 # }}}
 
 # Data Loading functions {{{
