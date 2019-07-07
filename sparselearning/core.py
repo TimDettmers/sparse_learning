@@ -13,14 +13,7 @@ import math
 import os
 import shutil
 import time
-import types
-from itertools import chain
-import matplotlib
 from matplotlib import pyplot as plt
-
-import torch.backends.cudnn as cudnn
-
-cudnn.benchmark = True
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, gradient_neuron, covariance, variance.')
@@ -60,7 +53,7 @@ class LinearDecay(object):
 
 class Masking(object):
     def __init__(self, optimizer, death_rate=0.3, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='random', redistribution_mode='variance', threshold=0.001):
-        growth_modes = ['variance', 'random', 'covariance', 'momentum']
+        growth_modes = ['variance', 'random', 'covariance', 'momentum', 'gradient_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
             print('Supported modes are:', str(growth_modes))
@@ -70,7 +63,6 @@ class Masking(object):
         self.growth_death_ratio = growth_death_ratio
         self.redistribution_mode = redistribution_mode
         self.death_rate_decay = death_rate_decay
-        print(growth_mode, death_mode, redistribution_mode)
 
         self.masks = {}
         self.modules = []
@@ -88,11 +80,9 @@ class Masking(object):
         self.adjustments = []
         self.baseline_nonzero = None
         self.name2baseline_nonzero = {}
-        self.layer_norms = []
 
         self.grad_var = {}
         self.input_var = {}
-        self.mask_over_time = {}
 
         # stats
         self.name2variance = {}
@@ -102,35 +92,28 @@ class Masking(object):
         self.total_removed = 0
         self.total_zero = 0
         self.total_nonzero = 0
-        self.excluded_layers = {}
         self.death_rate = death_rate
         self.name2death_rate = {}
-        self.initialize = None
         self.steps = 0
-        self.first_layer = None
-        self.base_lr = None
-        self.density_counter = {}
-        self.name_to_32bit = {}
-        self.half = False
+
+        # global growth/death state
         self.threshold = threshold
         self.growth_threshold = threshold
         self.growth_increment = 0.2
         self.increment = 0.2
         self.tolerance = 0.02
         self.prune_every_k_steps = None
-        self.global_init = False
 
-    def init_optimizer(self):
-        if 'fp32_from_fp16' in self.optimizer.state_dict():
-            for (name, tensor), tensor2 in zip(self.modules[0].named_parameters(), self.optimizer.state_dict()['fp32_from_fp16'][0]):
-                self.name_to_32bit[name] = tensor2
-            self.half = True
+    #def init_optimizer(self):
+    #    if 'fp32_from_fp16' in self.optimizer.state_dict():
+    #        for (name, tensor), tensor2 in zip(self.modules[0].named_parameters(), self.optimizer.state_dict()['fp32_from_fp16'][0]):
+    #            self.name_to_32bit[name] = tensor2
+    #        self.half = True
 
 
     def init(self, mode='enforce_density_per_layer', density=0.05):
-        self.initialize = mode
         self.sparsity = density
-        self.init_optimizer()
+        #self.init_optimizer()
         if mode == 'enforce_density_per_layer':
             self.baseline_nonzero = 0
             for module in self.modules:
@@ -177,64 +160,6 @@ class Masking(object):
                 prob = growth/np.prod(weight.shape)
                 self.masks[name][:] = (torch.rand(weight.shape) < prob).float().data.cuda()
             self.apply_mask()
-        elif mode == 'passthrough':
-
-            layer_number = 0
-            nonzeros = []
-            for name, module in list(self.modules[0].named_modules())[::-1]:
-                if isinstance(module, nn.Linear):
-                    module.bias.data *= 0.0
-                    module.weight.data *= 0.0
-                    in_dim = module.weight.shape[1]
-                    out_dim = module.weight.shape[0]
-                    neurons_per_feature = in_dim // out_dim
-                    #if layer_number == 0: 
-                    #    module.weight.data[:] = -1.0
-
-                    j = 0
-                    for i in range(out_dim):
-                        for k in range(neurons_per_feature):
-                            module.weight.data[i, j] = 1.0
-                            j += 1
-                    nonzeros.append(j)
-                    self.first_layer = (module, name)
-                    layer_number += 1
-                    self.masks[name+'.weight'] = (module.weight.data != 0.0).float().cuda()
-            # set first weight to zero
-
-                if isinstance(module, nn.Conv2d):
-                    raise NotImplemented('TODO: Conv2d')
-            module, name = self.first_layer
-            w = module.weight
-            total_size = 0
-            for weight in self.masks.values():
-                total_size += weight.numel()
-            self.baseline_nonzero = total_size*density
-            module.weight.data *= 0.0
-            budget = self.baseline_nonzero - sum(nonzeros[:-1])
-            i = 0
-            offset = 0
-            while True:
-                offset += 1
-                for i in range(weight.shape[1]):
-                    if budget == 0: break
-                    k += offset
-                    if k >= weight.shape[0]: k = 0
-                    w.data[k, i] = 1.0
-                    budget -= 1
-                if budget == 0: break
-            print(w.data.sum(1), w.data.sum(1).shape)
-            print((w.data!= 0.0).sum().item(), (module.weight.data != 0.0).sum().item())
-
-            self.masks[name+'.weight'] = (module.weight.data != 0.0).float().cuda()
-            print((self.masks[name+'.weight'] != 0.0).sum().item())
-
-            total_size = 0
-            for name, weight in self.masks.items():
-                total_size += (weight.data!= 0.0).sum().item()
-
-            print(total_size)
-            print(nonzeros)
 
         self.init_death_rate(self.death_rate)
         self.print_nonzero_counts()
@@ -282,9 +207,6 @@ class Masking(object):
                 self.clear_gradients()
                 self.reset_momentum()
 
-
-
-
     def add_module(self, module, density, sparse_init='enforce_density_per_layer'):
         self.modules.append(module)
         for name, tensor in module.named_parameters():
@@ -295,19 +217,6 @@ class Masking(object):
         self.remove_type(nn.BatchNorm1d)
         self.remove_type(nn.PReLU)
         self.init(mode=sparse_init, density=density)
-
-
-    def register_layer_norm(self, partial_name):
-        for module in self.modules:
-            for m1 in module.modules():
-                for key, value in m1._modules.items():
-                    if partial_name in key:
-                        self.layer_norms.append(value)
-        print('Added {0} layer norm layers.'.format(len(self.layer_norms)))
-
-    def reset_layer_norm(self):
-        for norm in self.layer_norms:
-            norm.reset_parameters()
 
     def remove_weight(self, name):
         if name in self.masks:
@@ -341,12 +250,7 @@ class Masking(object):
         for module in self.modules:
             for name, tensor in module.named_parameters():
                 if name in self.masks:
-                    if self.half:
-                        tensor.data = tensor.data*self.masks[name].half()
-                        tensor2 = self.name_to_32bit[name]
-                        tensor2.data = tensor2.data*self.masks[name]
-                    else:
-                        tensor.data = tensor.data*self.masks[name]
+                    tensor.data = tensor.data*self.masks[name]
 
     def truncate_weights(self, partial_name=None):
         self.gather_statistics(partial_name)
@@ -436,18 +340,11 @@ class Masking(object):
 
                     new_nonzero = new_mask.sum().item()
 
-                    # storing mask for mask statistics
-                    if name not in self.mask_over_time:
-                        self.mask_over_time[name] = self.masks[name]
-                    else:
-                        self.mask_over_time[name] = self.mask_over_time[name] + self.masks[name]
-
                     # exchanging masks
                     self.masks.pop(name)
                     self.masks[name] = new_mask.float()
                     total_nonzero_new += new_nonzero
         self.apply_mask()
-        self.reset_layer_norm()
 
         print(self.total_nonzero, self.baseline_nonzero, self.adjusted_growth)
         if self.baseline_nonzero is None: self.baseline_nonzero = self.total_nonzero
@@ -496,8 +393,6 @@ class Masking(object):
                     elif partial_name not in name: continue
                 mask = self.masks[name]
                 if self.redistribution_mode == 'momentum':
-                    if self.half:
-                        tensor = self.name_to_32bit[name]
                     #adam_grad = self.optimizer.state[tensor]['exp_avg']
                     #if hasattr(self.optimizer, '_get_param_groups'):
                         #print('groups!')
@@ -519,11 +414,7 @@ class Masking(object):
                     g1, m1, n1 = self.grad_var[name]
                     V2, m1, n1 = self.input_var[name]
                     Cval = torch.abs(C)[mask.byte()].mean().item()
-                    #V1val = torch.abs(V1)[V1!=0.0].mean().item()
-                    #V2val = torch.abs(V2)[V2!=0.0].mean().item()
-                    #self.name2variance[name] = torch.abs(C)[mask == 0.0].mean().item()
-                    #self.name2variance[name] = torch.abs(C)[mask.byte()].mean().item()
-                    self.name2variance[name] = Cval#/(V1val*V2val)
+                    self.name2variance[name] = Cval
                 elif self.redistribution_mode == 'variance':
                     M, mean, n = self.grad_variance[name]
                     self.name2variance[name] = torch.abs(M)[mask.byte()].mean().item()
@@ -570,23 +461,6 @@ class Masking(object):
         residual = 0
         for name in self.name2variance:
             self.name2variance[name] /= self.total_variance
-
-        #for name in list(self.name2variance.keys()):
-        #    n = self.name2nonzeros[name] + self.name2zeros[name]
-        #    density = self.name2nonzeros[name] / float(n)
-        #    var = self.name2variance[name]
-        #    if density > 0.85:
-        #        if name not in self.density_counter: self.density_counter[name] = 0
-        #        self.density_counter[name] += 1
-        #        if self.density_counter[name] > 10:
-        #            print('Excluding weight {0} due excessive density.\n'.format(name))
-        #            self.baseline_nonzero -= int(n)
-        #            self.masks.pop(name)
-        #            self.name2variance.pop(name)
-        #            total_var = sum(self.name2variance.values())
-        #            for key in self.name2variance:
-        #                self.name2variance[key] /= total_var
-
 
         residual = 9999
         mean_residual = 0
@@ -870,9 +744,6 @@ class Masking(object):
         return new_mask.byte() | new_weights
 
     def gradient_growth(self, name, new_mask, total_regrowth, weight):
-        if self.half:
-            weight = self.name_to_32bit[name]
-
         if 'exp_avg' in self.optimizer.state[weight]:
             adam_m1 = self.optimizer.state[weight]['exp_avg']
             adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
@@ -892,9 +763,6 @@ class Masking(object):
 
 
     def gradient_neuron_growth(self, name, new_mask, total_regrowth, weight):
-        if self.half:
-            weight = self.name_to_32bit[name]
-
         if 'exp_avg' in self.optimizer.state[weight]:
             adam_m1 = self.optimizer.state[weight]['exp_avg']
             adam_m2 = self.optimizer.state[weight]['exp_avg_sq']
@@ -1386,8 +1254,3 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         pin_memory=True)
 
     return train_loader, valid_loader, test_loader
-
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
