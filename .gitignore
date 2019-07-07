@@ -119,3 +119,5 @@ transformer-xl/pytorch/LM-TFM*
 conv_transformer/data
 dynamic_sparse/data
 dynamic_sparse/runs/*
+mnist_cifar/_dataset*
+data

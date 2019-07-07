@@ -16,9 +16,9 @@ import time
 from matplotlib import pyplot as plt
 
 def add_sparse_args(parser):
-    parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, gradient_neuron, covariance, variance.')
-    parser.add_argument('--death', type=str, default='magnitude', help='Death mode / pruning mode. Choose from: magnitude, SET, covariance, threshold.')
-    parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, covariance, variance, magnitude, nonzeros, or none.')
+    parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and gradient_neuron.')
+    parser.add_argument('--death', type=str, default='magnitude', help='Death mode / pruning mode. Choose from: magnitude, SET, threshold.')
+    parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, magnitude, nonzeros, or none.')
     parser.add_argument('--death-rate', type=float, default=0.50, help='The pruning rate / death rate.')
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
     parser.add_argument('--sparse', action='store_true', default=True, help='Enable sparse mode. Default: True.')
@@ -52,8 +52,8 @@ class LinearDecay(object):
 
 
 class Masking(object):
-    def __init__(self, optimizer, death_rate=0.3, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='random', redistribution_mode='variance', threshold=0.001):
-        growth_modes = ['variance', 'random', 'covariance', 'momentum', 'gradient_neuron']
+    def __init__(self, optimizer, death_rate=0.3, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001):
+        growth_modes = ['random', 'momentum', 'gradient_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
             print('Supported modes are:', str(growth_modes))
@@ -66,23 +66,13 @@ class Masking(object):
 
         self.masks = {}
         self.modules = []
-        self.grad_variance = {}
         self.names = []
         self.optimizer = optimizer
-        self.variance_over_time = {}
 
-        self.activation_variance = {}
-        self.activation_variance_over_time = {}
-
-        self.covariance_activation = {}
-        self.grad_covariance = {}
         self.adjusted_growth = 0
         self.adjustments = []
         self.baseline_nonzero = None
         self.name2baseline_nonzero = {}
-
-        self.grad_var = {}
-        self.input_var = {}
 
         # stats
         self.name2variance = {}
@@ -103,13 +93,6 @@ class Masking(object):
         self.increment = 0.2
         self.tolerance = 0.02
         self.prune_every_k_steps = None
-
-    #def init_optimizer(self):
-    #    if 'fp32_from_fp16' in self.optimizer.state_dict():
-    #        for (name, tensor), tensor2 in zip(self.modules[0].named_parameters(), self.optimizer.state_dict()['fp32_from_fp16'][0]):
-    #            self.name_to_32bit[name] = tensor2
-    #        self.half = True
-
 
     def init(self, mode='enforce_density_per_layer', density=0.05):
         self.sparsity = density
@@ -186,12 +169,10 @@ class Masking(object):
     def at_end_of_epoch(self):
         self.truncate_weights()
         self.print_nonzero_counts()
-        self.clear_gradients()
         self.reset_momentum()
 
     def step(self):
         self.sample_gradient()
-        self.covariance_update()
         self.optimizer.step()
         self.apply_mask()
         self.death_rate_decay.step()
@@ -204,7 +185,6 @@ class Masking(object):
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights(partial_name=None)
                 self.print_nonzero_counts()
-                self.clear_gradients()
                 self.reset_momentum()
 
     def add_module(self, module, density, sparse_init='enforce_density_per_layer'):
@@ -275,8 +255,6 @@ class Masking(object):
                         new_mask = self.magnitude_death(weight, name)
                     elif self.death_mode == 'SET':
                         new_mask = self.magnitude_and_negativity_death(weight, name)
-                    elif self.death_mode == 'covariance':
-                        new_mask = self.covariance_death(mask, weight, name)
                     elif self.death_mode == 'threshold':
                         new_mask = self.threshold_death(mask, weight, name)
 
@@ -326,11 +304,7 @@ class Masking(object):
 
 
                     # growth
-                    if self.growth_mode == 'covariance':
-                        new_mask = self.covariance_growth(new_mask, total_regrowth, name, weight)
-                    elif self.growth_mode == 'variance':
-                        new_mask = self.variance_growth(new_mask, total_regrowth, name)
-                    elif self.growth_mode == 'random':
+                    if self.growth_mode == 'random':
                         new_mask = self.random_growth(new_mask, total_regrowth)
                     elif self.growth_mode == 'momentum':
                         new_mask = self.gradient_growth(name, new_mask, total_regrowth, weight)
@@ -408,16 +382,6 @@ class Masking(object):
                     #self.name2variance[name] = torch.abs(grad[mask==0]).mean().item()#/(V1val*V2val)
                     self.name2variance[name] = torch.abs(grad[mask.byte()]).mean().item()#/(V1val*V2val)
                     #print(name, self.name2variance[name])
-
-                elif self.redistribution_mode == 'covariance':
-                    C, mean, n = self.grad_covariance[name]
-                    g1, m1, n1 = self.grad_var[name]
-                    V2, m1, n1 = self.input_var[name]
-                    Cval = torch.abs(C)[mask.byte()].mean().item()
-                    self.name2variance[name] = Cval
-                elif self.redistribution_mode == 'variance':
-                    M, mean, n = self.grad_variance[name]
-                    self.name2variance[name] = torch.abs(M)[mask.byte()].mean().item()
                 elif self.redistribution_mode == 'magnitude':
                     self.name2variance[name] = torch.abs(tensor)[mask.byte()].mean().item()
                 elif self.redistribution_mode == 'nonzeros':
@@ -510,37 +474,6 @@ class Masking(object):
         if i == 1000:
             print('Error resolving the residual! Layers are too full! Residual left over: {0}'.format(residual))
 
-        #nonzero = []
-        #max_regrowth = []
-        #var = []
-        #drate = []
-        #names = []
-
-        #for name in self.name2variance:
-        #    names.append(name)
-        #    nonzero.append(self.name2nonzeros[name])
-        #    max_regrowth.append(self.name2nonzeros[name] + self.name2zeros[name])
-        #    var.append(self.name2variance[name])
-        #    drate.append(self.name2death_rate[name])
-
-
-        #nonzero = np.array(nonzero)
-        #max_regrowth = np.array(max_regrowth)
-        #var = np.array(var)
-        #drate = np.array(drate)
-
-        #total_removed = (drate*nonzero).sum()
-        #expected_var = 1.0/var.size
-
-        #total_regrowth = (var>expected_var)*drate*nonzero
-        #total_removed -= total_regrowth.sum()
-
-        #redistribute = (total_removed*var) + total_regrowth
-
-        #name2regrowth = {}
-        #for name, regrowth in zip(names, redistribute):
-        #    name2regrowth[name] = regrowth
-
         return name2regrowth
 
 
@@ -549,16 +482,6 @@ class Masking(object):
     '''
     def threshold_death(self, mask, weight, name):
         return (torch.abs(weight.data) > self.threshold)
-
-    def covariance_death(self, mask, weight, name):
-        num_remove = math.ceil(fraction*self.name2nonzeros[name])
-        num_zeros = self.name2zeros[name]
-        C, mean, n = self.grad_covariance[name]
-        x, idx = torch.sort(torch.abs(C[mask.byte()]))
-
-        threshold = x[num_remove].item()
-
-        return mask.byte() & (torch.abs(C) > threshold)
 
     def magnitude_death(self, weight, name):
         sparsity = self.name2zeros[name]/float(self.masks[name].numel())
@@ -705,37 +628,6 @@ class Masking(object):
                     GROWTH
     '''
 
-    def covariance_growth(self, new_mask, total_regrowth, name, weight):
-        C, mean, n = self.grad_covariance[name]
-        C = C.data
-        C = C*(new_mask==0).float()
-
-        y, idx = torch.sort(torch.abs((C).flatten()))
-        cov_threshold = y[-(total_regrowth-1)].item()
-        new_mask = new_mask | (torch.abs(C) > cov_threshold)
-
-        return new_mask
-
-    def variance_growth(self, new_mask, total_regrowth, name):
-        M, mean0, n = self.grad_variance[name]
-        M = M.cuda()
-        num_inputs = M.shape[1]
-
-        nonzero_counts = []
-        v = torch.zeros(M.shape[0], requires_grad=False).cuda()
-        for i, m in enumerate(M):
-            nonzero_mask = m>0
-            nonzero_counts.append(nonzero_mask.sum().item())
-            v[i] = m[nonzero_mask].sum().item()
-        v.data /= v.data.sum()
-
-        for i, fraction  in enumerate(v):
-            neuron_regrowth = fraction*total_regrowth
-            prob = (neuron_regrowth / (num_inputs-nonzero_counts[i]))
-            new_mask[i] = new_mask[i] | (torch.rand(M.shape[1]).cuda() < prob)
-
-        return new_mask
-
     def random_growth(self, new_mask, total_regrowth):
         n = (new_mask==0).sum().item()
         if n == 0: return new_mask
@@ -815,184 +707,6 @@ class Masking(object):
                 if name not in self.masks: continue
                 print('Death rate: {0}\n'.format(self.name2death_rate[name]))
                 break
-
-    def sample_gradient(self):
-        if not (self.redistribution_mode == 'variance' or self.growth_mode == 'variance'): return
-        for module in self.modules:
-            for name, tensor in module.named_parameters():
-                if name not in self.masks: continue
-                mask = self.masks[name]
-                if name not in self.grad_variance: self.grad_variance[name] = [None, (tensor.grad.data*mask), 1]
-                else:
-                    grad = (tensor.grad.data*mask)
-                    M, mean0, n = self.grad_variance[name]
-                    n += 1
-                    mean1 = mean0 + ((grad - mean0)*(1./n))
-                    if n == 2:
-                        M = (grad-mean0)*(grad-mean1)
-                        self.grad_variance[name] = [M, mean1, n]
-                    else:
-                        M = M + (grad-mean0)*(grad-mean1)
-                        self.grad_variance[name] = [M, mean1, n]
-
-    def clear_gradients(self):
-        for name in list(self.grad_variance.keys()):
-            self.grad_variance.pop(name)
-
-        for name in list(self.grad_covariance.keys()):
-            self.grad_covariance.pop(name)
-
-        for name in list(self.input_var.keys()):
-            self.input_var.pop(name)
-
-        for name in list(self.grad_var.keys()):
-            self.grad_var.pop(name)
-
-    def plot_variance_over_time(self, limit=50):
-        if os.path.exists('./plots'):
-            shutil.rmtree('./plots')
-        os.mkdir('./plots/')
-
-        for module in self.modules:
-            for name, tensor in module.named_parameters():
-                if name not in self.variance_over_time: continue
-                values = self.variance_over_time[name]
-                mask = values[0] > 0
-                cols, rows = np.where(mask)
-                nonzero = mask.sum()
-                weights = tensor[mask].data.cpu().numpy()
-                masked_values = []
-                for v in values:
-                    masked_values.append(v[mask].numpy())
-                for i in range(nonzero):
-                    weight_value = weights[i]
-                    y = []
-                    x = np.arange(len(values))
-                    for v in masked_values:
-                        y.append(v[i])
-
-                    plt.plot(x, y)
-                    plt.ylim((0, 0.0001))
-                    plt.title('weight value: ' + str(weight_value) + ' at ' + str(rows[i]) + ',' + str(cols[i]))
-                    #if i > 0 and i % 10 == 0:
-                    plt.savefig('./plots/{0}_{2}_{1}_{3:.3f}.png'.format(name, i, cols[i], weight_value))
-                    plt.clf()
-                    if i >= limit: break
-
-    def sample_activation_grad(self, name, x, grad):
-        if name not in self.activation_variance: self.activation_variance[name] = [[], []]
-        self.activation_variance[name][0].append(torch.mean(torch.abs(x.data),dim=0).cpu().numpy())
-        self.activation_variance[name][1].append(torch.var(grad.data,dim=0).cpu().numpy())
-
-    def clear_activation_grads(self):
-        for name in list(self.activation_variance.keys()):
-            if name not in self.activation_variance_over_time: self.activation_variance_over_time[name] = [[],[]]
-
-            mean = self.activation_variance[name][0]
-            var = self.activation_variance[name][1]
-            n = len(mean)
-
-            for i in range(n):
-                if i == 0:
-                    agg_mean = mean[0]
-                    agg_var = var[0]
-                else:
-                    agg_mean += mean[i]
-                    agg_var += var[i]
-
-            agg_mean /= n
-            agg_var /= n
-            self.activation_variance_over_time[name][0].append(agg_mean)
-            self.activation_variance_over_time[name][1].append(agg_var)
-            self.activation_variance.pop(name)
-
-    def add_covariance_activation(self, name, x):
-        self.covariance_activation[name] = x
-
-    def covariance_update(self):
-        if not (self.redistribution_mode == 'covariance' or self.growth_mode == 'covariance'): return
-        for module in self.modules:
-            for name, tensor in module.named_parameters():
-                if name not in self.covariance_activation: continue
-                if name not in self.masks: continue
-                a = self.covariance_activation[name].data
-                # mean of activation over batch dimension [b, i] ->  [i]
-                # mean of gradient over each neuron [h, i] -> [h]
-                dims = list(range(len(a.shape)))[:-1]
-                dims_tensor = list(range(len(tensor.shape))[::-1])[:-1]
-                mask = self.masks[name]
-                if name not in self.grad_covariance:
-                    self.grad_covariance[name] = [None, a.mean(dims), 1]
-                    self.grad_var[name] = [None, (tensor.grad.data*mask), 1]
-                    self.input_var[name] = [None, a.mean(dims), 1]
-                else:
-                    activation = a.mean(dims)
-                    raw_grad = tensor.grad.data*mask
-                    grad = raw_grad.mean(dims_tensor)
-                    #print(a.shape, raw_grad.shape)
-
-                    # variance of gradient
-                    #h_M_grad, h_mean0_grad, n = self.grad_var[name]
-                    #mean0_grad = h_mean0_grad.cuda()
-                    M_grad, mean0_grad, n = self.grad_var[name]
-
-                    # variance of input
-                    #h_M_input, h_mean0_input, xn = self.input_var[name]
-                    #mean0_input = h_mean0_input.cuda()
-                    M_input, mean0_input, xn = self.input_var[name]
-
-                    n += 1
-                    mean1_grad = mean0_grad + ((raw_grad - mean0_grad)*(1./n))
-                    mean1_input = mean0_input + ((activation - mean0_input)*(1./n))
-
-                    C, ymean0, yn = self.grad_covariance[name]
-                    ymean1 = ymean0 + ((activation - ymean0)*(1./yn))
-
-                    if n == 2:
-                        M_grad = (raw_grad-mean0_grad)*(raw_grad-mean1_grad)
-                        M_input = (activation-mean0_input)*(activation-mean1_input)
-                        C = torch.ger(grad-mean0_grad.mean(dims_tensor),(activation-ymean1)).data.float()
-                        #self.grad_var[name] = [M_grad.cpu(), mean1_grad.cpu(), n]
-                        #self.input_var[name] = [M_input.cpu(), mean1_input.cpu(), n]
-                        self.grad_covariance[name] = [C, ymean1, n]
-                        self.grad_var[name] = [M_grad, mean1_grad, n]
-                        self.input_var[name] = [M_input, mean1_input, n]
-                    else:
-                        #M_grad = h_M_grad.cuda()
-                        #M_input = h_M_input.cuda()
-                        #M_grad = h_M_grad.cuda()
-                        #M_input = h_M_input.cuda()
-                        #print('var', name, activation.std(), raw_grad[mask.byte()].std())
-                        C = C + (torch.ger(grad-mean0_grad.mean(1),activation-ymean1).data.float())
-                        M_grad = M_grad + (raw_grad-mean0_grad)*(raw_grad-mean1_grad)
-                        M_input = M_input + (activation-mean0_input)*(activation-mean1_input)
-                        self.grad_covariance[name] = [C, ymean1, n]
-                        self.grad_var[name] = [M_grad, mean1_grad, n]
-                        self.input_var[name] = [M_input, mean1_input, n]
-
-    def plot_activation_variance(self, limit=500):
-        if os.path.exists('./plots'):
-            shutil.rmtree('./plots')
-        os.mkdir('./plots/')
-
-        for name, values in self.activation_variance_over_time.items():
-            mean, var = values
-            num_units = var[0].shape[0]
-            for i in range(num_units):
-                x = np.arange(len(mean))
-                y = []
-                for v in var:
-                    y.append(v[i])
-
-                plt.plot(x, y)
-                y = []
-                for v in mean:
-                    y.append(v[i]/500000.)
-                plt.plot(x, y)
-                plt.ylim((0, 0.00001))
-                plt.savefig('./plots/{0}_{1}.png'.format(name, i))
-                plt.clf()
-                if i >= limit: break
 
     def reset_momentum(self):
         """
