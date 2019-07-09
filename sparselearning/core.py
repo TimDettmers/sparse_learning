@@ -302,7 +302,7 @@ class Masking(object):
 
                     # growth
                     if self.growth_mode == 'random':
-                        new_mask = self.random_growth(new_mask, total_regrowth)
+                        new_mask = self.random_growth(name, new_mask, total_regrowth, weight)
                     elif self.growth_mode == 'momentum':
                         new_mask = self.momentum_growth(name, new_mask, total_regrowth, weight)
                     elif self.growth_mode == 'momentum_neuron':

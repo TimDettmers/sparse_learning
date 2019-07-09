@@ -36,13 +36,13 @@ models['lenet5'] = (LeNet_5_Caffe,[])
 models['lenet300-100'] = (LeNet_300_100,[])
 models['alexnet-s'] = (AlexNet, ['s', 10])
 models['alexnet-b'] = (AlexNet, ['b', 10])
-models['vgg-c'] = (VGG16, ['C'])
-models['vgg-d'] = (VGG16, ['D'])
-models['vgg-like'] = (VGG16, ['like'])
-models['wrn-28-2'] = (WideResNet, [28, 2])
-models['wrn-22-8'] = (WideResNet, [22, 8])
-models['wrn-16-8'] = (WideResNet, [16, 8])
-models['wrn-16-10'] = (WideResNet, [16, 10])
+models['vgg-c'] = (VGG16, ['C', 10])
+models['vgg-d'] = (VGG16, ['D', 10])
+models['vgg-like'] = (VGG16, ['like', 10])
+models['wrn-28-2'] = (WideResNet, [28, 2, 10, 0.3])
+models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
+models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
+models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
 
 def print_and_log(msg):
     print(msg)
@@ -110,8 +110,8 @@ def main():
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 0.1)')
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                        help='SGD momentum (default: 0.5)')
+    parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
+                        help='SGD momentum (default: 0.9)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=17, metavar='S', help='random seed (default: 17)')
@@ -129,6 +129,8 @@ def main():
     parser.add_argument('--model', type=str, default='')
     parser.add_argument('--l2', type=float, default=5.0e-4)
     parser.add_argument('--iterations', type=int, default=1, help='How many times the model should be run after each other. Default=1')
+    parser.add_argument('--save-features', action='store_true', help='Resumes a saved model and saves its feature data to disk for plotting.')
+    parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -155,6 +157,8 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
+            cls_args.append(args.save_features)
+            cls_args.append(args.bench)
             model = cls(*cls_args).to(device)
             print_and_log(model)
             print_and_log('='*60)
@@ -167,7 +171,7 @@ def main():
             print_and_log('Redistribution mode: {0}'.format(args.redistribution))
             print_and_log('='*60)
 
-        optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=0.9,weight_decay=args.l2, nesterov=True)
+        optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
         lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
 
         if args.resume:
