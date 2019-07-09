@@ -13,6 +13,9 @@ class SparseSpeedupBench(object):
         self.layer_timings_sparse = {}
         self.iter_idx = 0
         self.layer_0_idx = None
+        self.total_timings = []
+        self.total_timings_channel_sparse = []
+        self.total_timings_sparse = []
 
     def get_density(self, x):
         return (x.data!=0.0).sum().item()/x.numel()
@@ -73,9 +76,24 @@ class SparseSpeedupBench(object):
             total_time_channel_sparse += t_channel_sparse
 
             print('Layer {0}: Dense {1:.6f} Channel Sparse {2:.6f} vs Full Sparse {3:.6f}'.format(layer_id, t_dense, t_channel_sparse, t_sparse))
+        self.total_timings.append(total_time_dense)
+        self.total_timings_sparse.append(total_time_sparse)
+        self.total_timings_channel_sparse.append(total_time_channel_sparse)
+
+        print('Speedups for this segment:')
         print('Dense took {0:.4f}s. Channel Sparse took {1:.4f}s. Speedup of {2:.4f}x'.format(total_time_dense, total_time_channel_sparse, total_time_dense/total_time_channel_sparse))
         print('Dense took {0:.4f}s. Sparse took {1:.4f}s. Speedup of {2:.4f}x'.format(total_time_dense, total_time_sparse, total_time_dense/total_time_sparse))
         print('\n')
+
+        total_dense = np.sum(self.total_timings)
+        total_sparse = np.sum(self.total_timings_sparse)
+        total_channel_sparse = np.sum(self.total_timings_channel_sparse)
+        print('Speedups for entire training:')
+        print('Dense took {0:.4f}s. Channel Sparse took {1:.4f}s. Speedup of {2:.4f}x'.format(total_dense, total_channel_sparse, total_dense/total_channel_sparse)
+        print('Dense took {0:.4f}s. Sparse took {1:.4f}s. Speedup of {2:.4f}x'.format(total_dense, total_sparse, total_dense/total_sparse)
+        print('\n')
+
+        # clear timings
         for layer_id in list(self.layer_timings.keys()):
             self.layer_timings.pop(layer_id)
             self.layer_timings_channel_sparse.pop(layer_id)
