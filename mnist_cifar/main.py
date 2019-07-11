@@ -15,7 +15,6 @@ from sparselearning.core import Masking, CosineDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders
 
-from apex.fp16_utils import FP16_Optimizer
 
 cudnn.benchmark = True
 cudnn.deterministic = True
@@ -134,6 +133,14 @@ def main():
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
+
+    if args.fp16:
+        try:
+            from apex.fp16_utils import FP16_Optimizer
+        except:
+            print('WARNING: apex not installed, ignoring --fp16 option')
+            args.fp16 = False
+
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
 

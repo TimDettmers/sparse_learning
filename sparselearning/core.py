@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from scipy.sparse import coo_matrix, csr_matrix
 import numpy as np
 import math
 import os
