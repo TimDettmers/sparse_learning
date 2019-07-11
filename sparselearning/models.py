@@ -153,7 +153,7 @@ class AlexNet(nn.Module):
         return F.log_softmax(x, dim=1)
 
 class LeNet_300_100(nn.Module):
-    def __init__(self):
+    def __init__(self, save_features=None, bench_model=False):
         super(LeNet_300_100, self).__init__()
         self.fc1 = nn.Linear(28*28, 300, bias=True)
         self.fc2 = nn.Linear(300, 100, bias=True)
@@ -176,7 +176,7 @@ class LeNet_5_Caffe(nn.Module):
     and therefore intermediate shapes do not match the official LeNet-5.
     """
 
-    def __init__(self):
+    def __init__(self, save_features=None, bench_model=False):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 20, 5, padding=0, bias=True)
         self.conv2 = nn.Conv2d(20, 50, 5, bias=True)
