@@ -56,6 +56,8 @@ Beyond standard parameters like batch-size and learning rate which usage can be 
 
 ### Running an ImageNet Model
 
+To run ImageNet you need to install [Apex](https://github.com/NVIDIA/apex). For me it currently does not work to install apex from pip, but installing it from the repo works just fine.
+
 The ImageNet code for sparse momentum can be found in the sub-folder `imagenet` which contains an adjusted version of [NVIDIA Deep Learning Examples: RN50v1.5](https://github.com/NVIDIA/DeepLearningExamples/tree/master/PyTorch/Classification/RN50v1.5). For now, please follow the instructions of this repo (I will update more specific instructions later). You can use the adjusted `RN50_FP32_4GPU.sh` script in the `imagenet/example` folder to run an ImageNet example once you setup everything as described in the original repo.
 
 ### Running Your Own Model
@@ -67,6 +69,6 @@ With the sparse learning library it is easy to run sparse momentum on your own m
 
 ## Extending the Library
 
-Some changes to the library are still pending which will enable the easy extension with your own sparse learning library. Stay tuned.
+Some changes to the library are still pending which will enable the easy extension with your own sparse learning algorithm. Stay tuned.
 
 [template]: https://timdettmers.com/wp-content/uploads/2019/07/code.png "Generic example usage of sparse learning library."
