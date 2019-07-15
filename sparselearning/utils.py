@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 
 class DatasetSplitter(torch.utils.data.Dataset):
+    """This splitter makes sure that we always use the same training/validation split"""
     def __init__(self,parent_dataset,split_start=-1,split_end= -1):
         split_start = split_start if split_start != -1 else 0
         split_end = split_end if split_end != -1 else len(parent_dataset)
@@ -22,8 +23,9 @@ class DatasetSplitter(torch.utils.data.Dataset):
         assert index < len(self),"index out of bounds in split_datset"
         return self.parent_dataset[index + self.split_start]
 
-
 def get_cifar10_dataloaders(args, validation_split=0.0):
+    """Creates augmented train, validation, and test data loaders."""
+
     normalize = transforms.Normalize((0.4914, 0.4822, 0.4465),
                                      (0.2023, 0.1994, 0.2010))
 
@@ -83,6 +85,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0):
 
 
 def get_mnist_dataloaders(args, validation_split=0.0):
+    """Creates augmented train, validation, and test data loaders."""
     normalize = transforms.Normalize((0.1307,), (0.3081,))
     transform = transform=transforms.Compose([transforms.ToTensor(),normalize])
 

@@ -7,6 +7,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SparseSpeedupBench(object):
+    """Class to benchmark speedups for convolutional layers.
+
+    Basic usage:
+    1. Assing a single SparseSpeedupBench instance to class (and sub-classes with conv layers).
+    2. Instead of forwarding input through normal convolutional layers, we pass them through the bench:
+        self.bench = SparseSpeedupBench()
+        self.conv_layer1 = nn.Conv2(3, 96, 3)
+
+        if self.bench is not None:
+            outputs = self.bench.forward(self.conv_layer1, inputs, layer_id='conv_layer1')
+        else:
+            outputs = self.conv_layer1(inputs)
+    3. Speedups of the convolutional layer will be aggregated and print every 1000 mini-batches.
+    """
     def __init__(self):
         self.layer_timings = {}
         self.layer_timings_channel_sparse = {}
@@ -102,6 +116,19 @@ class SparseSpeedupBench(object):
 
 
 class AlexNet(nn.Module):
+    """AlexNet with batch normalization and without pooling.
+
+    This is an adapted version of AlexNet as taken from
+    SNIP: Single-shot Network Pruning based on Connection Sensitivity,
+    https://arxiv.org/abs/1810.02340
+
+    There are two different version of AlexNet:
+    AlexNet-s (small): Has hidden layers with size 1024
+    AlexNet-b (big):   Has hidden layers with size 2048
+
+    Based on https://github.com/mi-lad/snip/blob/master/train.py
+    by Milad Alizadeh.
+    """
 
     def __init__(self, config='s', num_classes=1000, save_features=False, bench_model=False):
         super(AlexNet, self).__init__()
@@ -153,6 +180,11 @@ class AlexNet(nn.Module):
         return F.log_softmax(x, dim=1)
 
 class LeNet_300_100(nn.Module):
+    """Simple NN with hidden layers [300, 100]
+
+    Based on https://github.com/mi-lad/snip/blob/master/train.py
+    by Milad Alizadeh.
+    """
     def __init__(self, save_features=None, bench_model=False):
         super(LeNet_300_100, self).__init__()
         self.fc1 = nn.Linear(28*28, 300, bias=True)
@@ -170,10 +202,13 @@ class LeNet_300_100(nn.Module):
 
 
 class LeNet_5_Caffe(nn.Module):
-    """
+    """LeNet-5 without padding in the first layer.
     This is based on Caffe's implementation of Lenet-5 and is slightly different
     from the vanilla LeNet-5. Note that the first layer does NOT have padding
     and therefore intermediate shapes do not match the official LeNet-5.
+
+    Based on https://github.com/mi-lad/snip/blob/master/train.py
+    by Milad Alizadeh.
     """
 
     def __init__(self, save_features=None, bench_model=False):
@@ -222,6 +257,9 @@ class VGG16(nn.Module):
         * Reduced size of FC layers to 512
         * Adjusted flattening to match CIFAR-10 shapes
         * Replaced dropout layers with BatchNorm
+
+    Based on https://github.com/mi-lad/snip/blob/master/train.py
+    by Milad Alizadeh.
     """
 
     def __init__(self, config, num_classes=10, save_features=False, bench_model=False):
@@ -292,6 +330,11 @@ class VGG16(nn.Module):
 
 
 class WideResNet(nn.Module):
+    """Wide Residual Network with varying depth and width.
+
+    For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
+    https://arxiv.org/abs/1605.07146
+    """
     def __init__(self, depth, widen_factor, num_classes=10, dropRate=0.3, save_features=False, bench_model=False):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
@@ -352,6 +395,11 @@ class WideResNet(nn.Module):
 
 
 class BasicBlock(nn.Module):
+    """Wide Residual Network basic block
+
+    For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
+    https://arxiv.org/abs/1605.07146
+    """
     def __init__(self, in_planes, out_planes, stride, dropRate=0.0, save_features=False, bench=None):
         super(BasicBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
@@ -399,6 +447,11 @@ class BasicBlock(nn.Module):
         return torch.add(x if self.equalInOut else self.convShortcut(x), out)
 
 class NetworkBlock(nn.Module):
+    """Wide Residual Network network block which holds basic blocks.
+
+    For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
+    https://arxiv.org/abs/1605.07146
+    """
     def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0, save_features=False, bench=None):
         super(NetworkBlock, self).__init__()
         self.feats = []

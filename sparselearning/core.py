@@ -22,6 +22,10 @@ def add_sparse_args(parser):
     parser.add_argument('--sparse', action='store_true', default=True, help='Enable sparse mode. Default: True.')
 
 class CosineDecay(object):
+    """Decays a pruning rate according to a cosine schedule
+
+    This class is just a wrapper around PyTorch's CosineAnnealingLR.
+    """
     def __init__(self, death_rate, T_max, eta_min=0.005, last_epoch=-1):
         self.sgd = optim.SGD(torch.nn.ParameterList([torch.nn.Parameter(torch.zeros(1))]), lr=death_rate)
         self.cosine_stepper = torch.optim.lr_scheduler.CosineAnnealingLR(self.sgd, T_max, eta_min, last_epoch)
@@ -33,6 +37,7 @@ class CosineDecay(object):
         return self.sgd.param_groups[0]['lr']
 
 class LinearDecay(object):
+    """Decays a pruning rate linearly with each step."""
     def __init__(self, death_rate, factor=0.99, frequency=600):
         self.factor = factor
         self.steps = 0
@@ -50,7 +55,29 @@ class LinearDecay(object):
 
 
 class Masking(object):
-    def __init__(self, optimizer, death_rate=0.3, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001):
+    """Wraps PyTorch model parameters with a sparse mask.
+
+    Creates a mask for each parameter tensor contained in the model. When
+    `apply_mask()` is called, it applies the sparsity pattern to the parameters.
+
+    Basic usage:
+        optimizer = torchoptim.SGD(model.parameters(),lr=args.lr)
+        decay = CosineDecay(args.death_rate, len(train_loader)*(args.epochs))
+        mask = Masking(optimizer, death_rate_decay=decay)
+        model = MyModel()
+        mask.add_module(model)
+
+    Removing layers: Layers can be removed individually, by type, or by partial
+    match of their name.
+      - `mask.remove_weight(name)` requires an exact name of
+    a parameter.
+      - `mask.remove_weight_partial_name(partial_name=name)` removes all
+        parameters that contain the partial name. For example 'conv' would remove all
+        layers with 'conv' in their name.
+      - `mask.remove_type(type)` removes all layers of a certain type. For example,
+        mask.remove_type(torch.nn.BatchNorm2d) removes all 2D batch norm layers.
+    """
+    def __init__(self, optimizer, death_rate=0.5, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001):
         growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
