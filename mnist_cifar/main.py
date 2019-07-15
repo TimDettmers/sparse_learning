@@ -4,6 +4,7 @@ import shutil
 import time
 import argparse
 import logging
+import hashlib
 
 import torch
 import torch.nn.functional as F
@@ -20,15 +21,8 @@ cudnn.benchmark = True
 cudnn.deterministic = True
 
 if not os.path.exists('./models'): os.mkdir('./models')
-logging.basicConfig(filename='./mnist_cifar.log',
-                            filemode='a',
-                            format='%(asctime)s %(message)s',
-                            datefmt='%H:%M:%S',
-                            level=logging.INFO)
-
-logging.info("Sparse learning on CIFAR/MNIST")
-
-logger = logging.getLogger('Sparse_MNIST_CIFAR')
+if not os.path.exists('./logs'): os.mkdir('./logs')
+logger = None
 
 models = {}
 models['lenet5'] = (LeNet_5_Caffe,[])
@@ -43,7 +37,21 @@ models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
 models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
 models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
 
+def setup_logger(args):
+    global logger
+    log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args).encode('utf-8')).hexdigest()[:8])
+    logging.basicConfig(filename=log_path,
+                                filemode='a',
+                                format='%(asctime)s %(message)s',
+                                datefmt='%H:%M:%S',
+                                level=logging.INFO)
+
+    logging.info("Sparse learning on CIFAR/MNIST")
+
+    logger = logging.getLogger('Sparse_MNIST_CIFAR')
+
 def print_and_log(msg):
+    global logger
     print(msg)
     logger.info(msg)
 
@@ -72,7 +80,7 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
 
-def evaluate(args, model, device, test_loader):
+def evaluate(args, model, device, test_loader, is_test_set=False):
     model.eval()
     test_loss = 0
     correct = 0
@@ -89,7 +97,8 @@ def evaluate(args, model, device, test_loader):
 
     test_loss /= float(n)
 
-    print_and_log('\nEvaluation: Average loss: {:.4f}, Accuracy: {}/{} ({:.3f}%)\n'.format(
+    print_and_log('\n{}: Average loss: {:.4f}, Accuracy: {}/{} ({:.3f}%)\n'.format(
+        'Test evaluation' if is_test_set else 'Evaluation',
         test_loss, correct, n, 100. * correct / float(n)))
     return correct / float(n)
 
@@ -133,6 +142,7 @@ def main():
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
+    setup_logger(args)
 
     if args.fp16:
         try:
@@ -164,9 +174,7 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
-            cls_args.append(args.save_features)
-            cls_args.append(args.bench)
-            model = cls(*cls_args).to(device)
+            model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
             print_and_log(model)
             print_and_log('='*60)
             print_and_log(args.model)
@@ -228,7 +236,7 @@ def main():
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1}.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
-        evaluate(args, model, device, test_loader)
+        evaluate(args, model, device, test_loader, is_test_set=True)
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iterations))
 
 if __name__ == '__main__':
