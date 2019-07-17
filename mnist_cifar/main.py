@@ -5,6 +5,7 @@ import time
 import argparse
 import logging
 import hashlib
+import copy
 
 import torch
 import torch.nn.functional as F
@@ -39,7 +40,16 @@ models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
 
 def setup_logger(args):
     global logger
-    log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args).encode('utf-8')).hexdigest()[:8])
+    args_copy = copy.deepcopy(args)
+    # copy to get a clean hash
+    # use the same log file hash if iterations or verbose are different
+    # these flags do not change the results
+    args_copy.iters = 1
+    args_copy.verbose = False
+    args_copy.log_interval = 1
+
+    log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args_copy).encode('utf-8')).hexdigest()[:8])
+    print(log_path)
     logging.basicConfig(filename=log_path,
                                 filemode='a',
                                 format='%(asctime)s %(message)s',
@@ -136,7 +146,7 @@ def main():
     parser.add_argument('--start-epoch', type=int, default=1)
     parser.add_argument('--model', type=str, default='')
     parser.add_argument('--l2', type=float, default=5.0e-4)
-    parser.add_argument('--iterations', type=int, default=1, help='How many times the model should be run after each other. Default=1')
+    parser.add_argument('--iters', type=int, default=1, help='How many times the model should be run after each other. Default=1')
     parser.add_argument('--save-features', action='store_true', help='Resumes a saved model and saves its feature data to disk for plotting.')
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     sparselearning.core.add_sparse_args(parser)
@@ -159,8 +169,8 @@ def main():
     print_and_log('='*80)
     print_and_log(args)
     torch.manual_seed(args.seed)
-    for i in range(args.iterations):
-        print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iterations))
+    for i in range(args.iters):
+        print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
         if args.data == 'mnist':
             train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
@@ -215,7 +225,8 @@ def main():
         mask = None
         if args.sparse:
             decay = CosineDecay(args.death_rate, len(train_loader)*(args.epochs))
-            mask = Masking(optimizer, death_mode=args.death, death_rate_decay=decay, growth_mode=args.growth, redistribution_mode=args.redistribution)
+            mask = Masking(optimizer, decay, death_mode=args.death, growth_mode=args.growth, redistribution_mode=args.redistribution,
+                           verbose=args.verbose)
             mask.add_module(model, density=args.density)
 
         for epoch in range(1, args.epochs + 1):
@@ -234,10 +245,10 @@ def main():
             if args.sparse and epoch < args.epochs:
                 mask.at_end_of_epoch()
 
-            print_and_log('Current learning rate: {0}. Time taken for epoch: {1}.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
+            print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
         evaluate(args, model, device, test_loader, is_test_set=True)
-        print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iterations))
+        print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
 
 if __name__ == '__main__':
    main()

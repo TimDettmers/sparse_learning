@@ -20,6 +20,7 @@ def add_sparse_args(parser):
     parser.add_argument('--death-rate', type=float, default=0.50, help='The pruning rate / death rate.')
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
     parser.add_argument('--sparse', action='store_true', default=True, help='Enable sparse mode. Default: True.')
+    parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
 
 class CosineDecay(object):
     """Decays a pruning rate according to a cosine schedule
@@ -77,7 +78,7 @@ class Masking(object):
       - `mask.remove_type(type)` removes all layers of a certain type. For example,
         mask.remove_type(torch.nn.BatchNorm2d) removes all 2D batch norm layers.
     """
-    def __init__(self, optimizer, death_rate=0.5, growth_death_ratio=1.0, death_rate_decay=None, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001):
+    def __init__(self, optimizer, death_rate_decay, death_rate=0.5, death_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001, global_growth=False, global_death=False, verbose=False):
         growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
@@ -85,19 +86,27 @@ class Masking(object):
 
         self.growth_mode = growth_mode
         self.death_mode = death_mode
-        self.growth_death_ratio = growth_death_ratio
         self.redistribution_mode = redistribution_mode
         self.death_rate_decay = death_rate_decay
+        self.verbose = verbose
 
         self.death_funcs = {}
         self.death_funcs['magnitude'] = self.magnitude_death
         self.death_funcs['SET'] = self.magnitude_and_negativity_death
         self.death_funcs['threshold'] = self.threshold_death
+        self.death_funcs['global_magnitude'] = self.global_magnitude_death
 
         self.growth_funcs = {}
         self.growth_funcs['random'] = self.random_growth
         self.growth_funcs['momentum'] = self.momentum_growth
         self.growth_funcs['momentum_neuron'] = self.momentum_neuron_growth
+        self.growth_funcs['global_momentum_growth'] = self.global_momentum_growth
+
+        self.growth_func = growth_mode
+        self.death_func = death_mode
+
+        self.global_growth = global_growth
+        self.global_death = global_death
 
         self.masks = {}
         self.modules = []
@@ -113,6 +122,8 @@ class Masking(object):
         self.name2variance = {}
         self.name2zeros = {}
         self.name2nonzeros = {}
+        self.name2removed = {}
+
         self.total_variance = 0
         self.total_removed = 0
         self.total_zero = 0
@@ -120,6 +131,7 @@ class Masking(object):
         self.death_rate = death_rate
         self.name2death_rate = {}
         self.steps = 0
+        self.start_name = None
 
         # global growth/death state
         self.threshold = threshold
@@ -131,6 +143,7 @@ class Masking(object):
 
     def init(self, mode='enforce_density_per_layer', density=0.05):
         self.sparsity = density
+        self.init_growth_and_death()
         #self.init_optimizer()
         if mode == 'enforce_density_per_layer':
             self.baseline_nonzero = 0
@@ -179,7 +192,6 @@ class Masking(object):
                 self.masks[name][:] = (torch.rand(weight.shape) < prob).float().data.cuda()
             self.apply_mask()
 
-        self.init_death_rate(self.death_rate)
         self.print_nonzero_counts()
 
         total_size = 0
@@ -197,29 +209,35 @@ class Masking(object):
         print('Total parameters after removed layers:', total_size)
         print('Total parameters under sparsity level of {0}: {1}'.format(density, density*total_size))
 
-    def init_death_rate(self, death_rate):
-        for name in self.masks:
-            self.name2death_rate[name] = death_rate
+    def init_growth_and_death(self):
+        if isinstance(self.growth_func, str) and self.growth_func in self.growth_funcs:
+            if 'global' in self.growth_func: self.global_growth = True
+            self.growth_func = self.growth_funcs[self.growth_func]
+
+        if isinstance(self.death_func, str) and self.death_func in self.death_funcs:
+            if 'global' in self.death_func: self.death_growth = True
+            self.death_func = self.death_funcs[self.death_func]
 
     def at_end_of_epoch(self):
         self.truncate_weights()
-        self.print_nonzero_counts()
+        if self.verbose:
+            self.print_nonzero_counts()
         self.reset_momentum()
 
     def step(self):
         self.optimizer.step()
         self.apply_mask()
         self.death_rate_decay.step()
-        for name in self.masks:
-            self.name2death_rate[name] = self.death_rate_decay.get_dr(self.name2death_rate[name])
+        self.death_rate = self.death_rate_decay.get_dr(self.death_rate)
 
         self.steps += 1
 
         if self.prune_every_k_steps is not None:
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights()
-                self.print_nonzero_counts()
                 self.reset_momentum()
+                if self.verbose:
+                    self.print_nonzero_counts()
 
     def add_module(self, module, density, sparse_init='enforce_density_per_layer'):
         self.modules.append(module)
@@ -231,6 +249,11 @@ class Masking(object):
         self.remove_type(nn.BatchNorm1d)
         self.remove_type(nn.PReLU)
         self.init(mode=sparse_init, density=density)
+
+    def is_at_start_of_pruning(self, name):
+        if self.start_name is None: self.start_name = name
+        if name == self.start_name: return True
+        else: return False
 
     def remove_weight(self, name):
         if name in self.masks:
@@ -266,14 +289,31 @@ class Masking(object):
                 if name in self.masks:
                     tensor.data = tensor.data*self.masks[name]
 
+    def adjust_death_rate(self):
+        for module in self.modules:
+            for name, weight in module.named_parameters():
+                if name not in self.masks: continue
+                if name not in self.name2death_rate: self.name2death_rate[name] = self.death_rate
+
+                self.name2death_rate[name] = self.death_rate
+
+                sparsity = self.name2zeros[name]/float(self.masks[name].numel())
+                if sparsity < 0.2:
+                    # determine if matrix is relativly dense but still growing
+                    expected_variance = 1.0/len(list(self.name2variance.keys()))
+                    actual_variance = self.name2variance[name]
+                    expected_vs_actual = expected_variance/actual_variance
+                    if expected_vs_actual < 1.0:
+                        # growing
+                        self.name2death_rate[name] = min(sparsity, self.name2death_rate[name])
+
     def truncate_weights(self):
         self.gather_statistics()
-        name2regrowth = self.calc_growth_redistribution()
+        self.adjust_death_rate()
 
         total_nonzero_new = 0
-        total_removed = 0
-        if self.death_mode == 'global_magnitude':
-            total_removed = self.global_magnitude_death()
+        if self.global_death:
+            self.total_removed = self.death_func()
         else:
             for module in self.modules:
                 for name, weight in module.named_parameters():
@@ -281,60 +321,23 @@ class Masking(object):
                     mask = self.masks[name]
 
                     # death
-                    if self.death_mode == 'magnitude':
-                        new_mask = self.magnitude_death(mask, weight, name)
-                    elif self.death_mode == 'SET':
-                        new_mask = self.magnitude_and_negativity_death(mask, weight, name)
-                    elif self.death_mode == 'threshold':
-                        new_mask = self.threshold_death(mask, weight, name)
-
-                    total_removed += self.name2nonzeros[name] - new_mask.sum().item()
-                    #self.masks.pop(name)
-                    #self.masks[name] = new_mask
+                    new_mask = self.death_func(mask, weight, name)
+                    removed = self.name2nonzeros[name] - new_mask.sum().item()
+                    self.total_removed += removed
+                    self.name2removed[name] = removed
                     self.masks[name][:] = new_mask
 
-
-        if self.growth_mode == 'global_momentum':
-            total_nonzero_new = self.global_momentum_growth(total_removed + self.adjusted_growth)
+        name2regrowth = self.calc_growth_redistribution()
+        if self.global_growth:
+            total_nonzero_new = self.growth_func(self.total_removed + self.adjusted_growth)
         else:
-            if self.death_mode == 'threshold':
-                expected_killed = sum(name2regrowth.values())
-                #print(expected_killed, total_removed, self.threshold)
-                if total_removed < (1.0-self.tolerance)*expected_killed:
-                    self.threshold *= 2.0
-                elif total_removed > (1.0+self.tolerance) * expected_killed:
-                    self.threshold *= 0.5
-
             for module in self.modules:
                 for name, weight in module.named_parameters():
                     if name not in self.masks: continue
                     new_mask = self.masks[name].data.byte()
 
-                    if self.death_mode == 'threshold':
-                        total_regrowth = math.floor((total_removed/float(expected_killed))*name2regrowth[name]*self.growth_death_ratio)
-                    elif self.redistribution_mode == 'none':
-                        if name not in self.name2baseline_nonzero:
-                            self.name2baseline_nonzero[name] = self.name2nonzeros[name]
-                        old = self.name2baseline_nonzero[name]
-                        new = new_mask.sum().item()
-                        #print(old, new)
-                        total_regrowth = int(old-new)
-                    elif self.death_mode == 'global_magnitude':
-                        expected_removed = self.baseline_nonzero*self.name2death_rate[name]
-                        expected_vs_actual = total_removed/expected_removed
-                        total_regrowth = math.floor(expected_vs_actual*name2regrowth[name]*self.growth_death_ratio)
-                    else:
-                        total_regrowth = math.floor(name2regrowth[name]*self.growth_death_ratio)
-
                     # growth
-                    if self.growth_mode == 'random':
-                        new_mask = self.random_growth(name, new_mask, total_regrowth, weight)
-                    elif self.growth_mode == 'momentum':
-                        new_mask = self.momentum_growth(name, new_mask, total_regrowth, weight)
-                    elif self.growth_mode == 'momentum_neuron':
-                        new_mask = self.momentum_neuron_growth(name, new_mask, total_regrowth, weight)
-
-
+                    new_mask = self.growth_func(name, new_mask, math.floor(name2regrowth[name]), weight)
                     new_nonzero = new_mask.sum().item()
 
                     # exchanging masks
@@ -347,10 +350,9 @@ class Masking(object):
         # Here we run an exponential smoothing over (death-growth) residuals to adjust future growth
         self.adjustments.append(self.baseline_nonzero - total_nonzero_new)
         self.adjusted_growth = 0.25*self.adjusted_growth + (0.75*(self.baseline_nonzero - total_nonzero_new)) + np.mean(self.adjustments)
-        print(self.total_nonzero, self.baseline_nonzero, self.adjusted_growth)
-
-        if self.total_nonzero > 0:
-            print('old, new nonzero count:', self.total_nonzero, total_nonzero_new, self.adjusted_growth)
+        if self.total_nonzero > 0 and self.verbose:
+            print('Nonzero before/after: {0}/{1}. Growth adjustment: {2:.2f}.'.format(
+                  self.total_nonzero, total_nonzero_new, self.adjusted_growth))
 
     '''
                     REDISTRIBUTION
@@ -360,6 +362,7 @@ class Masking(object):
         self.name2nonzeros = {}
         self.name2zeros = {}
         self.name2variance = {}
+        self.name2removed = {}
 
         self.total_variance = 0.0
         self.total_removed = 0
@@ -388,24 +391,16 @@ class Masking(object):
                 self.name2zeros[name] = mask.numel() - self.name2nonzeros[name]
 
                 sparsity = self.name2zeros[name]/float(self.masks[name].numel())
-                death_rate = self.name2death_rate[name]
-                if sparsity < 0.2:
-                    expected_variance = 1.0/len(list(self.name2variance.keys()))
-                    actual_variance = self.name2variance[name]
-                    expected_vs_actual = expected_variance/actual_variance
-                    if expected_vs_actual < 1.0:
-                        death_rate = min(sparsity, death_rate)
-                num_remove = math.ceil(death_rate*self.name2nonzeros[name])
-                self.total_removed += num_remove
                 self.total_nonzero += self.name2nonzeros[name]
                 self.total_zero += self.name2zeros[name]
+
+        for name in self.name2variance:
+            self.name2variance[name] /= self.total_variance
 
     def calc_growth_redistribution(self):
         num_overgrowth = 0
         total_overgrowth = 0
         residual = 0
-        for name in self.name2variance:
-            self.name2variance[name] /= self.total_variance
 
         residual = 9999
         mean_residual = 0
@@ -415,17 +410,8 @@ class Masking(object):
         while residual > 0 and i < 1000:
             residual = 0
             for name in self.name2variance:
-                #death_rate = min(self.name2death_rate[name], max(0.05, (self.name2zeros[name]/float(self.masks[name].numel()))))
-                sparsity = self.name2zeros[name]/float(self.masks[name].numel())
                 death_rate = self.name2death_rate[name]
-                if sparsity < 0.2:
-                    expected_variance = 1.0/len(list(self.name2variance.keys()))
-                    actual_variance = self.name2variance[name]
-                    expected_vs_actual = expected_variance/actual_variance
-                    if expected_vs_actual < 1.0:
-                        death_rate = min(sparsity, death_rate)
                 num_remove = math.ceil(death_rate*self.name2nonzeros[name])
-                #num_remove = math.ceil(self.name2death_rate[name]*self.name2nonzeros[name])
                 num_nonzero = self.name2nonzeros[name]
                 num_zero = self.name2zeros[name]
                 max_regrowth = num_zero + num_remove
@@ -451,6 +437,32 @@ class Masking(object):
         if i == 1000:
             print('Error resolving the residual! Layers are too full! Residual left over: {0}'.format(residual))
 
+
+        for module in self.modules:
+            for name, weight in module.named_parameters():
+                if name not in self.masks: continue
+
+                if self.death_mode == 'threshold':
+                    if self.is_at_start_of_pruning(name):
+                        expected_killed = sum(name2regrowth.values())
+                        #print(expected_killed, total_removed, self.threshold)
+                        if self.total_removed < (1.0-self.tolerance)*expected_killed:
+                            self.threshold *= 2.0
+                        elif self.total_removed > (1.0+self.tolerance) * expected_killed:
+                            self.threshold *= 0.5
+
+                    name2regrowth[name] = math.floor((self.total_removed/float(expected_killed))*name2regrowth[name])
+                elif self.redistribution_mode == 'none':
+                    if name not in self.name2baseline_nonzero:
+                        self.name2baseline_nonzero[name] = self.name2nonzeros[name]
+                    old = self.name2baseline_nonzero[name]
+                    new = new_mask.sum().item()
+                    total_regrowth = int(old-new)
+                elif self.death_mode == 'global_magnitude':
+                    expected_removed = self.baseline_nonzero*self.name2death_rate[name]
+                    expected_vs_actual = self.total_removed/expected_removed
+                    name2regrowth[name] = math.floor(expected_vs_actual*name2regrowth[name])
+
         return name2regrowth
 
 
@@ -461,28 +473,14 @@ class Masking(object):
         return (torch.abs(weight.data) > self.threshold)
 
     def magnitude_death(self, mask, weight, name):
-        sparsity = self.name2zeros[name]/float(self.masks[name].numel())
-        death_rate = self.name2death_rate[name]
-        if sparsity < 0.2:
-            expected_variance = 1.0/len(list(self.name2variance.keys()))
-            actual_variance = self.name2variance[name]
-            expected_vs_actual = expected_variance/actual_variance
-            if expected_vs_actual < 1.0:
-                death_rate = min(sparsity, death_rate)
-                print(name, expected_variance, actual_variance, expected_vs_actual, death_rate)
-        num_remove = math.ceil(death_rate*self.name2nonzeros[name])
-        if num_remove == 0.0: return weight.data != 0.0
-        #num_remove = math.ceil(self.name2death_rate[name]*self.name2nonzeros[name])
+        num_remove = math.ceil(self.name2death_rate[name]*self.name2nonzeros[name])
         num_zeros = self.name2zeros[name]
+        k = math.ceil(num_zeros + num_remove)
+        if num_remove == 0.0: return weight.data != 0.0
 
         x, idx = torch.sort(torch.abs(weight.data.view(-1)))
-        n = idx.shape[0]
-        num_nonzero = n-num_zeros
-
-        k = math.ceil(num_zeros + num_remove)
-        threshold = x[k-1].item()
-
-        return (torch.abs(weight.data) > threshold)
+        mask.data.view(-1)[idx[:k]] = 0.0
+        return mask
 
     def global_magnitude_death(self):
         death_rate = 0.0
@@ -659,11 +657,7 @@ class Masking(object):
                 else:
                     print(name, num_nonzeros)
 
-        for module in self.modules:
-            for name, tensor in module.named_parameters():
-                if name not in self.masks: continue
-                print('Death rate: {0}\n'.format(self.name2death_rate[name]))
-                break
+        print('Death rate: {0}\n'.format(self.death_rate))
 
     def reset_momentum(self):
         """
