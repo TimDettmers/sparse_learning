@@ -191,7 +191,7 @@ def main():
             print_and_log('='*60)
 
             print_and_log('='*60)
-            print_and_log('Death mode: {0}'.format(args.death))
+            print_and_log('Prune mode: {0}'.format(args.prune))
             print_and_log('Growth mode: {0}'.format(args.growth))
             print_and_log('Redistribution mode: {0}'.format(args.redistribution))
             print_and_log('='*60)
@@ -223,9 +223,9 @@ def main():
             model = model.half()
 
         mask = None
-        if args.sparse:
-            decay = CosineDecay(args.death_rate, len(train_loader)*(args.epochs))
-            mask = Masking(optimizer, decay, death_mode=args.death, growth_mode=args.growth, redistribution_mode=args.redistribution,
+        if not args.dense:
+            decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+            mask = Masking(optimizer, decay, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
                            verbose=args.verbose)
             mask.add_module(model, density=args.density)
 
@@ -242,7 +242,7 @@ def main():
                              'optimizer' : optimizer.state_dict()},
                             is_best=False, filename=args.save_model)
 
-            if args.sparse and epoch < args.epochs:
+            if not args.dense and epoch < args.epochs:
                 mask.at_end_of_epoch()
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))

@@ -12,6 +12,7 @@ for log_name in glob.iglob('./logs/*.log'):
 
             losses.append(loss)
             accs.append(acc)
+    if len(accs) == 0: continue
 
     acc_std = np.std(accs, ddof=1)
     acc_se = acc_std/np.sqrt(len(accs))
