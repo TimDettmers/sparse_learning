@@ -13,6 +13,12 @@ import shutil
 import time
 from matplotlib import pyplot as plt
 
+#from sparselearning.funcs import no_redistribution, momentum_redistribution, magnitude_redistribution, nonzero_redistribution
+#from sparselearning.funcs import global_momentum_growth, momentum_growth, random_growth, momentum_neuron_growth
+#from sparselearning.funcs import threshold_prune, magnitude_prune, global_magnitude_prune, magnitude_and_negativity_prune
+
+from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
+
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
     parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
@@ -89,24 +95,6 @@ class Masking(object):
         self.redistribution_mode = redistribution_mode
         self.prune_rate_decay = prune_rate_decay
         self.verbose = verbose
-
-        self.prune_funcs = {}
-        self.prune_funcs['magnitude'] = self.magnitude_prune
-        self.prune_funcs['SET'] = self.magnitude_and_negativity_prune
-        self.prune_funcs['threshold'] = self.threshold_prune
-        self.prune_funcs['global_magnitude'] = self.global_magnitude_prune
-
-        self.growth_funcs = {}
-        self.growth_funcs['random'] = self.random_growth
-        self.growth_funcs['momentum'] = self.momentum_growth
-        self.growth_funcs['momentum_neuron'] = self.momentum_neuron_growth
-        self.growth_funcs['global_momentum_growth'] = self.global_momentum_growth
-
-        self.redistribution_funcs = {}
-        self.redistribution_funcs['momentum'] = self.momentum_redistribution
-        self.redistribution_funcs['nonzero'] = self.nonzero_redistribution
-        self.redistribution_funcs['magnitude'] = self.magnitude_redistribution
-        self.redistribution_funcs['none'] = self.no_redistribution
 
         self.growth_func = growth_mode
         self.prune_func = prune_mode
@@ -217,37 +205,37 @@ class Masking(object):
         print('Total parameters under sparsity level of {0}: {1}'.format(density, density*total_size))
 
     def init_growth_prune_and_redist(self):
-        if isinstance(self.growth_func, str) and self.growth_func in self.growth_funcs:
+        if isinstance(self.growth_func, str) and self.growth_func in growth_funcs:
             if 'global' in self.growth_func: self.global_growth = True
-            self.growth_func = self.growth_funcs[self.growth_func]
+            self.growth_func = growth_funcs[self.growth_func]
         elif isinstance(selg.growth_func, str):
             print('='*50, 'ERROR', '='*50)
             print('Growth mode function not known: {0}.'.format(self.growth_func))
             print('Use either a custom growth function or one of the pre-defined functions:')
-            for key in self.growth_funcs:
+            for key in growth_funcs:
                 print('\t{0}'.format(key))
             print('='*50, 'ERROR', '='*50)
             raise Exception('Unknown growth mode.')
 
-        if isinstance(self.prune_func, str) and self.prune_func in self.prune_funcs:
+        if isinstance(self.prune_func, str) and self.prune_func in prune_funcs:
             if 'global' in self.prune_func: self.prune_growth = True
-            self.prune_func = self.prune_funcs[self.prune_func]
+            self.prune_func = prune_funcs[self.prune_func]
         elif isinstance(self.prune_func, str):
             print('='*50, 'ERROR', '='*50)
             print('Prrune mode function not known: {0}.'.format(self.prune_func))
             print('Use either a custom prune function or one of the pre-defined functions:')
-            for key in self.prune_funcs:
+            for key in prune_funcs:
                 print('\t{0}'.format(key))
             print('='*50, 'ERROR', '='*50)
             raise Exception('Unknown prune mode.')
 
-        if isinstance(self.redistribution_func, str) and self.redistribution_func in self.redistribution_funcs:
-            self.redistribution_func = self.redistribution_funcs[self.redistribution_func]
+        if isinstance(self.redistribution_func, str) and self.redistribution_func in redistribution_funcs:
+            self.redistribution_func = redistribution_funcs[self.redistribution_func]
         elif isinstance(self.redistribution_func, str):
             print('='*50, 'ERROR', '='*50)
             print('Redistribution mode function not known: {0}.'.format(self.redistribution_func))
             print('Use either a custom redistribution function or one of the pre-defined functions:')
-            for key in self.redistribution_funcs:
+            for key in redistribution_funcs:
                 print('\t{0}'.format(key))
             print('='*50, 'ERROR', '='*50)
             raise Exception('Unknown redistribution mode.')
@@ -347,7 +335,7 @@ class Masking(object):
 
         total_nonzero_new = 0
         if self.global_prune:
-            self.total_removed = self.prune_func()
+            self.total_removed = self.prune_func(self)
         else:
             for module in self.modules:
                 for name, weight in module.named_parameters():
@@ -355,7 +343,7 @@ class Masking(object):
                     mask = self.masks[name]
 
                     # prune
-                    new_mask = self.prune_func(mask, weight, name)
+                    new_mask = self.prune_func(self, mask, weight, name)
                     removed = self.name2nonzeros[name] - new_mask.sum().item()
                     self.total_removed += removed
                     self.name2removed[name] = removed
@@ -363,7 +351,7 @@ class Masking(object):
 
         name2regrowth = self.calc_growth_redistribution()
         if self.global_growth:
-            total_nonzero_new = self.growth_func(self.total_removed + self.adjusted_growth)
+            total_nonzero_new = self.growth_func(self, self.total_removed + self.adjusted_growth)
         else:
             for module in self.modules:
                 for name, weight in module.named_parameters():
@@ -371,7 +359,7 @@ class Masking(object):
                     new_mask = self.masks[name].data.byte()
 
                     # growth
-                    new_mask = self.growth_func(name, new_mask, math.floor(name2regrowth[name]), weight)
+                    new_mask = self.growth_func(self, name, new_mask, math.floor(name2regrowth[name]), weight)
                     new_nonzero = new_mask.sum().item()
 
                     # exchanging masks
@@ -387,28 +375,6 @@ class Masking(object):
         if self.total_nonzero > 0 and self.verbose:
             print('Nonzero before/after: {0}/{1}. Growth adjustment: {2:.2f}.'.format(
                   self.total_nonzero, total_nonzero_new, self.adjusted_growth))
-
-    '''
-                    REDISTRIBUTION
-    '''
-
-    def momentum_redistribution(self, name, weight, mask):
-        grad = self.get_momentum_for_weight(weight)
-        mean_magnitude = torch.abs(grad[mask.byte()]).mean().item()
-        return mean_magnitude
-
-    def magnitude_redistribution(self, name, weight, mask):
-        mean_magnitude = torch.abs(weight)[mask.byte()].mean().item()
-        return mean_magnitude
-
-    def nonzero_redistribution(self, name, weight, mask):
-        nonzero = (weight !=0.0).sum().item()
-        return nonzero
-
-    def no_redistribution(self, name, weight, mask):
-        num_params = self.baseline_nonzero
-        n = weight.numel()
-        return n/float(num_params)
 
     def gather_statistics(self):
         self.name2nonzeros = {}
@@ -426,7 +392,7 @@ class Masking(object):
                 mask = self.masks[name]
 
                 # redistribution
-                self.name2variance[name] = self.redistribution_func(name, weight, mask)
+                self.name2variance[name] = self.redistribution_func(self, name, weight, mask)
 
                 if not np.isnan(self.name2variance[name]):
                     self.total_variance += self.name2variance[name]
@@ -498,162 +464,6 @@ class Masking(object):
                     name2regrowth[name] = math.floor(expected_vs_actual*name2regrowth[name])
 
         return name2regrowth
-
-
-    '''
-                    PRUNE
-    '''
-    def threshold_prune(self, mask, weight, name):
-        return (torch.abs(weight.data) > self.threshold)
-
-    def magnitude_prune(self, mask, weight, name):
-        num_remove = math.ceil(self.name2prune_rate[name]*self.name2nonzeros[name])
-        num_zeros = self.name2zeros[name]
-        k = math.ceil(num_zeros + num_remove)
-        if num_remove == 0.0: return weight.data != 0.0
-
-        x, idx = torch.sort(torch.abs(weight.data.view(-1)))
-        mask.data.view(-1)[idx[:k]] = 0.0
-        return mask
-
-    def global_magnitude_prune(self):
-        prune_rate = 0.0
-        for name in self.name2prune_rate:
-            if name in self.masks:
-                prune_rate = self.name2prune_rate[name]
-        tokill = math.ceil(prune_rate*self.baseline_nonzero)
-        total_removed = 0
-        prev_removed = 0
-        while total_removed < tokill*(1.0-self.tolerance) or (total_removed > tokill*(1.0+self.tolerance)):
-            total_removed = 0
-            for module in self.modules:
-                for name, weight in module.named_parameters():
-                    if name not in self.masks: continue
-                    remain = (torch.abs(weight.data) > self.threshold).sum().item()
-                    total_removed += self.name2nonzeros[name] - remain
-
-            if prev_removed == total_removed: break
-            prev_removed = total_removed
-            if total_removed > tokill*(1.0+self.tolerance):
-                self.threshold *= 1.0-self.increment
-                self.increment *= 0.99
-            elif total_removed < tokill*(1.0-self.tolerance):
-                self.threshold *= 1.0+self.increment
-                self.increment *= 0.99
-
-        for module in self.modules:
-            for name, weight in module.named_parameters():
-                if name not in self.masks: continue
-                self.masks[name][:] = torch.abs(weight.data) > self.threshold
-
-        return int(total_removed)
-
-
-    def magnitude_and_negativity_prune(self, mask, weight, name):
-        num_remove = math.ceil(self.name2prune_rate[name]*self.name2nonzeros[name])
-        if num_remove == 0.0: return weight.data != 0.0
-
-        num_zeros = self.name2zeros[name]
-        k = math.ceil(num_zeros + (num_remove/2.0))
-
-        # remove all weights which absolute value is smaller than threshold
-        x, idx = torch.sort(torch.abs(weight.data.view(-1)))
-        mask.data.view(-1)[idx[:k]] = 0.0
-
-        # remove the most negative weights
-        x, idx = torch.sort(weight.data.view(-1))
-        mask.data.view(-1)[idx[:math.ceil(num_remove/2.0)]] = 0.0
-
-        return mask
-
-    '''
-                    GROWTH
-    '''
-
-    def random_growth(self, name, new_mask, total_regrowth, weight):
-        n = (new_mask==0).sum().item()
-        if n == 0: return new_mask
-        expeced_growth_probability = (total_regrowth/n)
-        new_weights = torch.rand(new_mask.shape).cuda() < expeced_growth_probability
-        return new_mask.byte() | new_weights
-
-    def momentum_growth(self, name, new_mask, total_regrowth, weight):
-        grad = self.get_momentum_for_weight(weight)
-        grad = grad*(new_mask==0).float()
-        y, idx = torch.sort(torch.abs(grad).flatten(), descending=True)
-        new_mask.data.view(-1)[idx[:total_regrowth]] = 1.0
-
-        return new_mask
-
-    def momentum_neuron_growth(self, name, new_mask, total_regrowth, weight):
-        grad = self.get_momentum_for_weight(weight)
-
-        M = torch.abs(grad)
-        if len(M.shape) == 2: sum_dim = [1]
-        elif len(M.shape) == 4: sum_dim = [1, 2, 3]
-
-        v = M.mean(sum_dim).data
-        v /= v.sum()
-
-        slots_per_neuron = (new_mask==0).sum(sum_dim)
-
-        M = M*(new_mask==0).float()
-        for i, fraction  in enumerate(v):
-            neuron_regrowth = math.floor(fraction.item()*total_regrowth)
-            available = slots_per_neuron[i].item()
-
-            y, idx = torch.sort(M[i].flatten())
-            if neuron_regrowth > available:
-                neuron_regrowth = available
-            threshold = y[-(neuron_regrowth)].item()
-            if threshold == 0.0: continue
-            if neuron_regrowth < 10: continue
-            new_mask[i] = new_mask[i] | (M[i] > threshold)
-
-        return new_mask
-
-
-    def global_momentum_growth(self, total_regrowth):
-        togrow = total_regrowth
-        total_grown = 0
-        last_grown = 0
-        while total_grown < togrow*(1.0-self.tolerance) or (total_grown > togrow*(1.0+self.tolerance)):
-            total_grown = 0
-            total_possible = 0
-            for module in self.modules:
-                for name, weight in module.named_parameters():
-                    if name not in self.masks: continue
-
-                    new_mask = self.masks[name]
-                    grad = self.get_momentum_for_weight(weight)
-                    grad = grad*(new_mask==0).float()
-                    possible = (grad !=0.0).sum().item()
-                    total_possible += possible
-                    grown = (torch.abs(grad.data) > self.growth_threshold).sum().item()
-                    total_grown += grown
-            print(total_grown, self.growth_threshold, togrow, self.growth_increment, total_possible)
-            if total_grown == last_grown: break
-            last_grown = total_grown
-
-
-            if total_grown > togrow*(1.0+self.tolerance):
-                self.growth_threshold *= 1.02
-                #self.growth_increment *= 0.95
-            elif total_grown < togrow*(1.0-self.tolerance):
-                self.growth_threshold *= 0.98
-                #self.growth_increment *= 0.95
-
-        total_new_nonzeros = 0
-        for module in self.modules:
-            for name, weight in module.named_parameters():
-                if name not in self.masks: continue
-
-                new_mask = self.masks[name]
-                grad = self.get_momentum_for_weight(weight)
-                grad = grad*(new_mask==0).float()
-                self.masks[name][:] = (new_mask.byte() | (torch.abs(grad.data) > self.growth_threshold)).float()
-                total_new_nonzeros += new_mask.sum().item()
-        return total_new_nonzeros
 
 
     '''

@@ -17,6 +17,7 @@ from sparselearning.core import Masking, CosineDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders
 
+from extensions import magnitude_variance_pruning, variance_redistribution
 
 cudnn.benchmark = True
 cudnn.deterministic = True
@@ -223,6 +224,8 @@ def main():
             model = model.half()
 
         mask = None
+        args.prune = magnitude_variance_pruning
+        args.redistribution = variance_redistribution
         if not args.dense:
             decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
             mask = Masking(optimizer, decay, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
