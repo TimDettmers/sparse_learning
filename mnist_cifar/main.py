@@ -136,9 +136,9 @@ def main():
     parser.add_argument('--seed', type=int, default=17, metavar='S', help='random seed (default: 17)')
     parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                         help='how many batches to wait before logging training status')
+    parser.add_argument('--optimizer', type=str, default='sgd', help='The optimizer to use. Default: sgd. Options: sgd, adam.')
     parser.add_argument('--save-model', type=str, default='./models/model.pt', help='For Saving the current Model')
     parser.add_argument('--data', type=str, default='mnist')
-    parser.add_argument('--augment', action='store_true')
     parser.add_argument('--decay_frequency', type=int, default=25000)
     parser.add_argument('--l1', type=float, default=0.0)
     parser.add_argument('--fp16', action='store_true', help='Run in fp16 mode.')
@@ -197,7 +197,15 @@ def main():
             print_and_log('Redistribution mode: {0}'.format(args.redistribution))
             print_and_log('='*60)
 
-        optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+        optimizer = None
+        if args.optimizer == 'sgd':
+            optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+        elif args.optimizer == 'adam':
+            optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
+        else:
+            print('Unknown optimizer: {0}'.format(args.optimizer))
+            raise Exception('Unknown optimizer.')
+
         lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
 
         if args.resume:
@@ -223,9 +231,11 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
+        # add custom prune/growth/redisribution here
+        if args.prune == 'magnitude_variance': args.prune = magnitude_variance_pruning
+        if args.redistribution == 'variance': args.redistribution = variance_redistribution
+
         mask = None
-        args.prune = magnitude_variance_pruning
-        args.redistribution = variance_redistribution
         if not args.dense:
             decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
             mask = Masking(optimizer, decay, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
