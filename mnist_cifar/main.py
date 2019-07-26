@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import sparselearning
 from sparselearning.core import Masking, CosineDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
-from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders
+from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
 from extensions import magnitude_variance_pruning, variance_redistribution
 
@@ -220,6 +220,8 @@ def main():
                       .format(args.resume, checkpoint['epoch']))
                 print_and_log('Testing...')
                 evaluate(args, model, device, test_loader)
+                model.feats = []
+                model.densities = []
                 plot_class_feature_histograms(args, model, device, train_loader, optimizer)
             else:
                 print_and_log("=> no checkpoint found at '{}'".format(args.resume))

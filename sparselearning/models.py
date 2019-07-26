@@ -134,6 +134,7 @@ class AlexNet(nn.Module):
         super(AlexNet, self).__init__()
         self.save_features = save_features
         self.feats = []
+        self.densities = []
         self.bench = None if not bench_model else SparseSpeedupBench()
 
         factor = 1 if config=='s' else 2
@@ -174,6 +175,8 @@ class AlexNet(nn.Module):
             if self.save_features:
                 if isinstance(layer, nn.ReLU):
                     self.feats.append(x.clone().detach())
+                if isinstance(layer, nn.Conv2d):
+                    self.densities.append((layer.weight.data != 0.0).sum().item()/layer.weight.numel())
 
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
@@ -267,6 +270,7 @@ class VGG16(nn.Module):
 
         self.features = self.make_layers(VGG_CONFIGS[config], batch_norm=True)
         self.feats = []
+        self.densities = []
         self.save_features = save_features
         self.bench = None if not bench_model else SparseSpeedupBench()
 
@@ -321,6 +325,7 @@ class VGG16(nn.Module):
             if self.save_features:
                 if isinstance(layer, nn.ReLU):
                     self.feats.append(x.clone().detach())
+                    self.densities.append((x.data != 0.0).sum().item()/x.numel())
 
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
@@ -357,6 +362,7 @@ class WideResNet(nn.Module):
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
         self.feats = []
+        self.densities = []
         self.save_features = save_features
 
         for m in self.modules():
@@ -380,12 +386,19 @@ class WideResNet(nn.Module):
         out = self.block3(out)
 
         if self.save_features:
+            # this is a mess, but I do not have time to refactor it now
             self.feats += self.block1.feats
+            self.densities += self.block1.densities
             del self.block1.feats[:]
+            del self.block1.densities[:]
             self.feats += self.block2.feats
+            self.densities += self.block2.densities
             del self.block2.feats[:]
+            del self.block2.densities[:]
             self.feats += self.block3.feats
+            self.densities += self.block3.densities
             del self.block3.feats[:]
+            del self.block3.densities[:]
 
         out = self.relu(self.bn1(out))
         out = F.avg_pool2d(out, 8)
@@ -415,6 +428,7 @@ class BasicBlock(nn.Module):
         self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
                                padding=0, bias=False) or None
         self.feats = []
+        self.densities = []
         self.save_features = save_features
         self.bench = bench
         self.in_planes = in_planes
@@ -425,10 +439,12 @@ class BasicBlock(nn.Module):
             x = self.relu1(self.bn1(x))
             if self.save_features:
                 self.feats.append(x.clone().detach())
+                self.densities.append((x.data != 0.0).sum().item()/x.numel())
         else:
             out = self.relu1(self.bn1(x))
             if self.save_features:
                 self.feats.append(out.clone().detach())
+                self.densities.append((out.data != 0.0).sum().item()/out.numel())
         if self.bench:
             out0 = self.bench.forward(self.conv1, (out if self.equalInOut else x), str(self.in_planes) + '.conv1')
         else:
@@ -437,6 +453,7 @@ class BasicBlock(nn.Module):
         out = self.relu2(self.bn2(out0))
         if self.save_features:
             self.feats.append(out.clone().detach())
+            self.densities.append((out.data != 0.0).sum().item()/out.numel())
         if self.droprate > 0:
             out = F.dropout(out, p=self.droprate, training=self.training)
         if self.bench:
@@ -455,6 +472,7 @@ class NetworkBlock(nn.Module):
     def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0, save_features=False, bench=None):
         super(NetworkBlock, self).__init__()
         self.feats = []
+        self.densities = []
         self.save_features = save_features
         self.bench = bench
         self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
@@ -470,6 +488,8 @@ class NetworkBlock(nn.Module):
             x = layer(x)
             if self.save_features:
                 self.feats += layer.feats
+                self.densities += layer.densities
                 del layer.feats[:]
+                del layer.densities[:]
         return x
 

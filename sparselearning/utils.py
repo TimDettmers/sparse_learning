@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -131,12 +132,18 @@ def get_mnist_dataloaders(args, validation_split=0.0):
 
 
 def plot_class_feature_histograms(args, model, device, test_loader, optimizer):
+    if not os.path.exists('./results'): os.mkdir('./results')
     model.eval()
     agg = {}
     num_classes = 10
     feat_id = 0
+    sparse = not args.dense
+    model_name = 'alexnet'
+    #model_name = 'vgg'
+    #model_name = 'wrn'
 
 
+    densities = None
     for batch_idx, (data, target) in enumerate(test_loader):
         if batch_idx % 100 == 0: print(batch_idx,'/', len(test_loader))
         with torch.no_grad():
@@ -151,7 +158,9 @@ def plot_class_feature_histograms(args, model, device, test_loader, optimizer):
                 output = model(sub_data)
 
                 feats = model.feats
-                #print(len(feats))
+                if densities is None:
+                    densities = []
+                    densities += model.densities
 
                 if len(agg) == 0:
                     for feat_id, feat in enumerate(feats):
@@ -168,7 +177,12 @@ def plot_class_feature_histograms(args, model, device, test_loader, optimizer):
                         agg[feat_id][map_id][cls] += map_contributions[map_id].item()
 
                 del model.feats[:]
+                del model.densities[:]
                 model.feats = []
+                model.densities = []
+
+    if sparse:
+        np.save('./results/{0}_sparse_density_data'.format(model_name), densities)
 
     for feat_id, map_data in agg.items():
         data = np.array(map_data)
@@ -197,10 +211,7 @@ def plot_class_feature_histograms(args, model, device, test_loader, optimizer):
         normed_data = np.max(data/np.sum(data,1).reshape(-1, 1), 1)
         #normed_data = (data/np.sum(data,1).reshape(-1, 1) > 0.2).sum(1)
         #counts, bins = np.histogram(normed_data, bins=4, range=(0, 4))
-        sparse = False
-        np.save('./results/alexnet_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
-        #np.save('./results/VGG_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
-        #np.save('./results/WRN-28-2_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense'), normed_data)
+        np.save('./results/{2}_{1}_feat_data_layer_{0}'.format(feat_id, 'sparse' if sparse else 'dense', model_name), normed_data)
         #plt.ylim(0, channels/2.0)
         ##plt.hist(normed_data, bins=range(0, 5))
         #plt.hist(normed_data, bins=[(i+20)/float(200) for i in range(180)])
