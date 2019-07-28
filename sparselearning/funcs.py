@@ -242,7 +242,10 @@ def momentum_growth(masking, name, new_mask, total_regrowth, weight):
             masking.total_removed = 0
     """
     grad = masking.get_momentum_for_weight(weight)
-    grad = grad*(new_mask==0).float()
+    if grad.dtype == torch.float16:
+        grad = grad*(new_mask==0).half()
+    else:
+        grad = grad*(new_mask==0).float()
     y, idx = torch.sort(torch.abs(grad).flatten(), descending=True)
     new_mask.data.view(-1)[idx[:total_regrowth]] = 1.0
 

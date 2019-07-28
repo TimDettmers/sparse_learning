@@ -104,8 +104,7 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
     for batch_idx, (data, target) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
         data, target = data.to(device), target.to(device)
-        if args.fp16:
-            data = data.half()
+        if args.fp16: data = data.half()
         optimizer.zero_grad()
         output = model(data)
 
@@ -132,6 +131,7 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
+            if args.fp16: data = data.half()
             model.t = target
             output = model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
@@ -203,10 +203,10 @@ def main():
     print_and_log('='*80)
     torch.manual_seed(args.seed)
     print_and_log('PARAM = MOMENTUM')
-    for param in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:
+    for param in [0.0]:
         print_and_log('$'*80)
         print_and_log('Param START {0}'.format(param))
-        args.prune_rate = param
+        #args.prune_rate = param
         setup_logger(args)
         print_and_log(args)
         for i in range(args.iters):
@@ -266,6 +266,7 @@ def main():
 
 
             if args.fp16:
+                print('FP16')
                 optimizer = FP16_Optimizer(optimizer,
                                            static_loss_scale = None,
                                            dynamic_loss_scale = True,
@@ -276,11 +277,12 @@ def main():
             if args.prune == 'magnitude_variance': args.prune = magnitude_variance_pruning
             if args.redistribution == 'variance': args.redistribution = variance_redistribution
 
+            print(optimizer)
             mask = None
             if not args.dense:
                 decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
                 mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
-                               verbose=args.verbose)
+                               verbose=args.verbose, fp16=args.fp16)
                 mask.add_module(model, density=args.density)
 
             for epoch in range(1, args.epochs + 1):

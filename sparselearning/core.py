@@ -84,7 +84,7 @@ class Masking(object):
       - `mask.remove_type(type)` removes all layers of a certain type. For example,
         mask.remove_type(torch.nn.BatchNorm2d) removes all 2D batch norm layers.
     """
-    def __init__(self, optimizer, prune_rate_decay, prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001, global_growth=False, global_prune=False, verbose=False):
+    def __init__(self, optimizer, prune_rate_decay, prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001, global_growth=False, global_prune=False, verbose=False, fp16=False):
         growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
@@ -135,11 +135,12 @@ class Masking(object):
         self.increment = 0.2
         self.tolerance = 0.02
         self.prune_every_k_steps = None
+        self.half = fp16
+        self.name_to_32bit = {}
 
     def init(self, mode='enforce_density_per_layer', density=0.05):
         self.sparsity = density
         self.init_growth_prune_and_redist()
-        #self.init_optimizer()
         if mode == 'enforce_density_per_layer':
             self.baseline_nonzero = 0
             for module in self.modules:
@@ -309,7 +310,10 @@ class Masking(object):
         for module in self.modules:
             for name, tensor in module.named_parameters():
                 if name in self.masks:
-                    tensor.data = tensor.data*self.masks[name]
+                    if not self.half:
+                        tensor.data = tensor.data*self.masks[name]
+                    else:
+                        tensor.data = tensor.data*self.masks[name].half()
 
     def adjust_prune_rate(self):
         for module in self.modules:
