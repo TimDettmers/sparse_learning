@@ -506,6 +506,9 @@ def main():
     rewire_schedule = loaded_schedule['rewire_period_schedule']
     DeepR_temperature_schedule = loaded_schedule['DeepR_temperature_schedule']
     threshold = 1.0e-3
+    if args.resume:
+        print("Validating...")
+        validate(test_loader, model, criterion, 1,'validate')
     for epoch in range(args.start_epoch, nEpochs_to_prune if prune_mode else args.epochs):
         adjust_learning_rate(optimizer, epoch,lr_schedule)
         rewire_period = get_schedule_val(rewire_schedule,epoch)
@@ -513,7 +516,7 @@ def main():
         print('rewiring every {} iterations'.format(rewire_period))
 
         t1 = time.time()
-        current_iteration,threshold = train(train_loader, model, criterion, optimizer,epoch,current_iteration,rewire_period,DeepR_temperature,threshold)
+        current_iteration,threshold = train(mask, train_loader, model, criterion, optimizer,epoch,current_iteration,rewire_period,DeepR_temperature,threshold)
         print('epoch time ' + repr(time.time() - t1))
         
         if prune_mode and epoch >= start_pruning_after_epoch_n and (epoch - start_pruning_after_epoch_n) % prune_every_epoch_n == 0 and n_prunes_done < prune_iterations:
@@ -585,7 +588,7 @@ def main():
     print('Best accuracy: ', best_prec1)
 
 
-def train(train_loader, model, criterion, optimizer, epoch,current_iteration,rewire_period,DeepR_temperature,threshold):
+def train(mask, train_loader, model, criterion, optimizer, epoch,current_iteration,rewire_period,DeepR_temperature,threshold):
     global args
     """Train for one epoch on the training set"""
     batch_time = AverageMeter()
@@ -604,7 +607,6 @@ def train(train_loader, model, criterion, optimizer, epoch,current_iteration,rew
     end = time.time()
     epoch_start_time = time.time()
     for i, (input, target) in enumerate(train_loader):
-        #if i == 10: break
         data_time.update(time.time() - end)
 
         target = target.cuda()
@@ -650,7 +652,8 @@ def train(train_loader, model, criterion, optimizer, epoch,current_iteration,rew
                 if (st.get_sparsity()[0] != st.s_tensor.numel()):
                     st.s_tensor.grad.add_(torch.zeros_like(st.s_tensor).normal_(0.0,DeepR_std) * st.mask)
 
-        optimizer.step()
+        if mask is not None: mask.step()
+        else: optimizer.step()
 
         if args.rescale_tied_gradient:
             for st in [x for x in model.modules() if isinstance(x,TiedTensor)]:
