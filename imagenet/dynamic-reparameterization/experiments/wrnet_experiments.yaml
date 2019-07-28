@@ -1,0 +1,231 @@
+# ******************************************************************************
+# Copyright 2019 Intel Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ******************************************************************************
+
+jobs:
+##Baseline dense model training
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --job-idx 0
+
+###Pruning from full model experiments
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_prune_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --resume ./runs/cifar10_WideResNet_0 --prune-target-sparsity-fc 0.0 --prune-target-sparsity-conv 0.9 --prune-iterations 20 --post-prune-epochs 10 --prune --start-pruning-after-epoch 0  --sub-kernel-granularity 4 --cubic-prune-schedule --job-idx 1   
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_prune_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --resume ./runs/cifar10_WideResNet_0 --prune-target-sparsity-fc 0.0 --prune-target-sparsity-conv 0.8 --prune-iterations 20 --post-prune-epochs 10 --prune --start-pruning-after-epoch 0  --sub-kernel-granularity 4 --cubic-prune-schedule  --job-idx 2 
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_prune_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --resume ./runs/cifar10_WideResNet_0 --prune-target-sparsity-fc 0.0 --prune-target-sparsity-conv 0.7 --prune-iterations 20 --post-prune-epochs 10 --prune --start-pruning-after-epoch 0  --sub-kernel-granularity 4 --cubic-prune-schedule --job-idx 3
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_prune_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --resume ./runs/cifar10_WideResNet_0 --prune-target-sparsity-fc 0.0 --prune-target-sparsity-conv 0.6 --prune-iterations 20 --post-prune-epochs 10 --prune --start-pruning-after-epoch 0  --sub-kernel-granularity 4 --cubic-prune-schedule --job-idx 4
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_prune_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 2 --resume ./runs/cifar10_WideResNet_0 --prune-target-sparsity-fc 0.0 --prune-target-sparsity-conv 0.5 --prune-iterations 20 --post-prune-epochs 10 --prune --start-pruning-after-epoch 0  --sub-kernel-granularity 4 --cubic-prune-schedule --job-idx 5
+
+
+
+##dynamic sparse
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --job-idx 6
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --job-idx 7
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --job-idx 8
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --job-idx 9
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --job-idx 10
+
+###static sparse
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 11
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 12
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 13
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 14
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 15
+
+###equivalent size thin and dense network
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 0.75  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 16
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 0.98  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 17
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 1.15  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 18
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 1.33  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 19
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.0 --widen-factor 1.47  --sub-kernel-granularity 4 --epochs 400 --weight-decay 5.0e-4 --job-idx 20
+
+
+
+###DeepR
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml  --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 0.0 --stop-rewire-epoch 190 --DeepR --DeepR_eta 0.01 --L1-loss-coeff 1.0e-5 --job-idx 21
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml  --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 0.0 --stop-rewire-epoch 190 --DeepR --DeepR_eta 0.01  --L1-loss-coeff 1.0e-5 --job-idx 22
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml  --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 0.0 --stop-rewire-epoch 190 --DeepR --DeepR_eta 0.01 --L1-loss-coeff 1.0e-5 --job-idx 23
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml  --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 0.0 --stop-rewire-epoch 190 --DeepR --DeepR_eta 0.01  --L1-loss-coeff 1.0e-5 --job-idx 24
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml  --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 0.0 --stop-rewire-epoch 190 --DeepR --DeepR_eta 0.01 --L1-loss-coeff 1.0e-5 --job-idx 25
+
+##SET
+  -  python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4  --rewire-fraction 0.138 --stop-rewire-epoch 190 --job-idx 26
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4  --rewire-fraction 0.07 --stop-rewire-epoch 190 --job-idx 27
+
+  -  python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4  --rewire-fraction 0.046 --stop-rewire-epoch 190 --job-idx 28
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4  --rewire-fraction 0.034 --stop-rewire-epoch 190 --job-idx 29
+
+  -  python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4  --rewire-fraction 0.028 --stop-rewire-epoch 190 --job-idx 30
+
+
+##Dynamic sparse with 3x3 kernel slice re-allocation granularity
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 2000 --rewire-scaling --stop-rewire-epoch 190 --sub-kernel-granularity 2 --job-idx 31
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 2000 --rewire-scaling --stop-rewire-epoch 190  --sub-kernel-granularity 2 --job-idx 32
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2 --rewire --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 2000 --rewire-scaling --stop-rewire-epoch 190  --sub-kernel-granularity 2 --job-idx 33
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2 --rewire --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 2000 --rewire-scaling --stop-rewire-epoch 190  --sub-kernel-granularity 2 --job-idx 34
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2 --rewire --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 2000 --rewire-scaling --stop-rewire-epoch 190  --sub-kernel-granularity 2 --job-idx 35
+
+###hash nets
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --tied --job-idx 36
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2  --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --tied --job-idx 37
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.7 --widen-factor 2  --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --tied --job-idx 38
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.6 --widen-factor 2  --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --tied --job-idx 39
+
+  - python main.py --no-validate-train --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.5 --widen-factor 2  --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --tied --job-idx 40
+
+
+
+### Dynamic sparse with parameter re-allocation stopped mid-training
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --no-validate-train --job-idx 41
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 190 --no-validate-train --job-idx 42
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 180 --no-validate-train --job-idx 43
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 180 --no-validate-train --job-idx 44
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 170 --no-validate-train --job-idx 45
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 170 --no-validate-train --job-idx 46
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 160 --no-validate-train --job-idx 47
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 160 --no-validate-train --job-idx 48
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 150 --no-validate-train --job-idx 49
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 150  --no-validate-train --job-idx 50
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 140 --no-validate-train --job-idx 51
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 140 --no-validate-train --job-idx 52
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 130 --no-validate-train --job-idx 53
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 130 --no-validate-train --job-idx 54
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 120 --no-validate-train --job-idx 55
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 120 --no-validate-train --job-idx 56
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 110 --no-validate-train --job-idx 57
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 110 --no-validate-train --job-idx 58
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 100 --no-validate-train --job-idx 59
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 100 --no-validate-train --job-idx 60
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 90 --no-validate-train --job-idx 61
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 90 --no-validate-train --job-idx 62
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 80 --no-validate-train --job-idx 63
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 80 --no-validate-train --job-idx 64
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 70 --no-validate-train --job-idx 65
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 70 --no-validate-train --job-idx 66
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 60 --no-validate-train --job-idx 67
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/ wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 60 --no-validate-train --job-idx 68
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 50 --no-validate-train --job-idx 69
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 50 --no-validate-train --job-idx 70
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 40 --no-validate-train --job-idx 71
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 40 --no-validate-train --job-idx 72
+
+
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 30 --no-validate-train --job-idx 73
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 30 --no-validate-train --job-idx 74
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 20 --no-validate-train --job-idx 75
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 20 --no-validate-train --job-idx 76
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 10 --no-validate-train --job-idx 77
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2 --rewire --sub-kernel-granularity 4 --epochs 200 --weight-decay 5.0e-4 --threshold-prune --n-prune-params 20000 --rewire-scaling --stop-rewire-epoch 10 --no-validate-train --job-idx 78
+
+
+
+##Static sparse but with structure copied from trained dynamic sparse and random initialization. sparsities 0.8 and 0.9
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2  --sub-kernel-granularity 4  --epochs 400 --weight-decay 5.0e-4 --copy-mask-from ./runs/cifar10_WideResNet_6 --no-validate-train --job-idx 79
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2  --sub-kernel-granularity 4  --epochs 400 --weight-decay 5.0e-4 --copy-mask-from ./runs/cifar10_WideResNet_7 --no-validate-train --job-idx 80
+
+
+##Static sparse but with structure copied from trained dynamic sparse and initialization copied from the initialization of the same dynamic sparse network. sparsities 0.8 and 0.9
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.9 --widen-factor 2  --sub-kernel-granularity 4  --epochs 400 --weight-decay 5.0e-4 --copy-mask-from ./runs/cifar10_WideResNet_6 --resume ./runs/cifar10_WideResNet_6_initial  --no-validate-train --job-idx 81
+
+  - python main.py --model cifar10_WideResNet --schedule-file ./learning_schedules/wrnet_schedule_long.yaml --initial-sparsity-fc 0.00 --initial-sparsity-conv 0.8 --widen-factor 2  --sub-kernel-granularity 4  --epochs 400 --weight-decay 5.0e-4 --copy-mask-from ./runs/cifar10_WideResNet_7 --resume ./runs/cifar10_WideResNet_7_initial --no-validate-train --job-idx 82
+
