@@ -1,4 +1,5 @@
 from __future__ import print_function
+import sys
 import os
 import shutil
 import time
@@ -39,8 +40,42 @@ models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
 models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
 models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
 
+#def setup_logger(args):
+#    global logger
+#    print(len(logger.handlers))
+#    if len(logger.handlers) > 0:
+#        logger.handlers[0].stream.close()
+#        logger.removeHandler(logger.handlers[0])
+#    args_copy = copy.deepcopy(args)
+#    # copy to get a clean hash
+#    # use the same log file hash if iterations or verbose are different
+#    # these flags do not change the results
+#    args_copy.iters = 1
+#    args_copy.verbose = False
+#    args_copy.log_interval = 1
+#    args_copy.seed = 0
+#    print(args_copy)
+#
+#    log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args_copy).encode('utf-8')).hexdigest()[:8])
+#    print('Logger path:', log_path)
+#    logging.basicConfig(filename=log_path,
+#                                filemode='a',
+#                                format='%(asctime)s %(message)s',
+#                                datefmt='%H:%M:%S',
+#                                level=logging.INFO)
+#
+#    logging.info("Sparse learning on CIFAR/MNIST")
+#
+#    logger = logging.getLogger('Sparse_MNIST_CIFAR')
+
 def setup_logger(args):
     global logger
+    if logger == None:
+        logger = logging.getLogger()
+    else:  # wish there was a logger.close()
+        for handler in logger.handlers[:]:  # make a copy of the list
+            logger.removeHandler(handler)
+
     args_copy = copy.deepcopy(args)
     # copy to get a clean hash
     # use the same log file hash if iterations or verbose are different
@@ -51,16 +86,13 @@ def setup_logger(args):
     args_copy.seed = 0
 
     log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args_copy).encode('utf-8')).hexdigest()[:8])
-    print(log_path)
-    logging.basicConfig(filename=log_path,
-                                filemode='a',
-                                format='%(asctime)s %(message)s',
-                                datefmt='%H:%M:%S',
-                                level=logging.INFO)
 
-    logging.info("Sparse learning on CIFAR/MNIST")
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(fmt='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
 
-    logger = logging.getLogger('Sparse_MNIST_CIFAR')
+    fh = logging.FileHandler(log_path)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
 
 def print_and_log(msg):
     global logger
@@ -169,102 +201,110 @@ def main():
     print_and_log('\n\n')
     print_and_log('='*80)
     print_and_log('='*80)
-    print_and_log(args)
     torch.manual_seed(args.seed)
-    for i in range(args.iters):
-        print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
+    print_and_log('PARAM = MOMENTUM')
+    for param in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:
+        print_and_log('$'*80)
+        print_and_log('Param START {0}'.format(param))
+        args.prune_rate = param
+        setup_logger(args)
+        print_and_log(args)
+        for i in range(args.iters):
+            print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
-        if args.data == 'mnist':
-            train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
-        else:
-            train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split)
-
-        if args.model not in models:
-            print('You need to select an existing model via the --model argument. Available models include: ')
-            for key in models:
-                print('\t{0}'.format(key))
-            raise Exception('You need to select a model')
-        else:
-            cls, cls_args = models[args.model]
-            model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
-            print_and_log(model)
-            print_and_log('='*60)
-            print_and_log(args.model)
-            print_and_log('='*60)
-
-            print_and_log('='*60)
-            print_and_log('Prune mode: {0}'.format(args.prune))
-            print_and_log('Growth mode: {0}'.format(args.growth))
-            print_and_log('Redistribution mode: {0}'.format(args.redistribution))
-            print_and_log('='*60)
-
-        optimizer = None
-        if args.optimizer == 'sgd':
-            optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
-        elif args.optimizer == 'adam':
-            optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
-        else:
-            print('Unknown optimizer: {0}'.format(args.optimizer))
-            raise Exception('Unknown optimizer.')
-
-        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
-
-        if args.resume:
-            if os.path.isfile(args.resume):
-                print_and_log("=> loading checkpoint '{}'".format(args.resume))
-                checkpoint = torch.load(args.resume)
-                args.start_epoch = checkpoint['epoch']
-                model.load_state_dict(checkpoint['state_dict'])
-                optimizer.load_state_dict(checkpoint['optimizer'])
-                print_and_log("=> loaded checkpoint '{}' (epoch {})"
-                      .format(args.resume, checkpoint['epoch']))
-                print_and_log('Testing...')
-                evaluate(args, model, device, test_loader)
-                model.feats = []
-                model.densities = []
-                plot_class_feature_histograms(args, model, device, train_loader, optimizer)
+            if args.data == 'mnist':
+                train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
             else:
-                print_and_log("=> no checkpoint found at '{}'".format(args.resume))
+                train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split)
+
+            if args.model not in models:
+                print('You need to select an existing model via the --model argument. Available models include: ')
+                for key in models:
+                    print('\t{0}'.format(key))
+                raise Exception('You need to select a model')
+            else:
+                cls, cls_args = models[args.model]
+                model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
+                print_and_log(model)
+                print_and_log('='*60)
+                print_and_log(args.model)
+                print_and_log('='*60)
+
+                print_and_log('='*60)
+                print_and_log('Prune mode: {0}'.format(args.prune))
+                print_and_log('Growth mode: {0}'.format(args.growth))
+                print_and_log('Redistribution mode: {0}'.format(args.redistribution))
+                print_and_log('='*60)
+
+            optimizer = None
+            if args.optimizer == 'sgd':
+                optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+            elif args.optimizer == 'adam':
+                optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
+            else:
+                print('Unknown optimizer: {0}'.format(args.optimizer))
+                raise Exception('Unknown optimizer.')
+
+            lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
+
+            if args.resume:
+                if os.path.isfile(args.resume):
+                    print_and_log("=> loading checkpoint '{}'".format(args.resume))
+                    checkpoint = torch.load(args.resume)
+                    args.start_epoch = checkpoint['epoch']
+                    model.load_state_dict(checkpoint['state_dict'])
+                    optimizer.load_state_dict(checkpoint['optimizer'])
+                    print_and_log("=> loaded checkpoint '{}' (epoch {})"
+                          .format(args.resume, checkpoint['epoch']))
+                    print_and_log('Testing...')
+                    evaluate(args, model, device, test_loader)
+                    model.feats = []
+                    model.densities = []
+                    plot_class_feature_histograms(args, model, device, train_loader, optimizer)
+                else:
+                    print_and_log("=> no checkpoint found at '{}'".format(args.resume))
 
 
-        if args.fp16:
-            optimizer = FP16_Optimizer(optimizer,
-                                       static_loss_scale = None,
-                                       dynamic_loss_scale = True,
-                                       dynamic_loss_args = {'init_scale': 2 ** 16})
-            model = model.half()
+            if args.fp16:
+                optimizer = FP16_Optimizer(optimizer,
+                                           static_loss_scale = None,
+                                           dynamic_loss_scale = True,
+                                           dynamic_loss_args = {'init_scale': 2 ** 16})
+                model = model.half()
 
-        # add custom prune/growth/redisribution here
-        if args.prune == 'magnitude_variance': args.prune = magnitude_variance_pruning
-        if args.redistribution == 'variance': args.redistribution = variance_redistribution
+            # add custom prune/growth/redisribution here
+            if args.prune == 'magnitude_variance': args.prune = magnitude_variance_pruning
+            if args.redistribution == 'variance': args.redistribution = variance_redistribution
 
-        mask = None
-        if not args.dense:
-            decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
-            mask = Masking(optimizer, decay, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
-                           verbose=args.verbose)
-            mask.add_module(model, density=args.density)
+            mask = None
+            if not args.dense:
+                decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+                mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
+                               verbose=args.verbose)
+                mask.add_module(model, density=args.density)
 
-        for epoch in range(1, args.epochs + 1):
+            for epoch in range(1, args.epochs + 1):
 
-            t0 = time.time()
-            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask)
+                t0 = time.time()
+                train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask)
 
-            if args.valid_split > 0.0:
-                val_acc = evaluate(args, model, device, valid_loader)
+                if args.valid_split > 0.0:
+                    val_acc = evaluate(args, model, device, valid_loader)
 
-            save_checkpoint({'epoch': epoch + 1,
-                             'state_dict': model.state_dict(),
-                             'optimizer' : optimizer.state_dict()},
-                            is_best=False, filename=args.save_model)
+                save_checkpoint({'epoch': epoch + 1,
+                                 'state_dict': model.state_dict(),
+                                 'optimizer' : optimizer.state_dict()},
+                                is_best=False, filename=args.save_model)
 
-            if not args.dense and epoch < args.epochs:
-                mask.at_end_of_epoch()
+                if not args.dense and epoch < args.epochs:
+                    mask.at_end_of_epoch()
 
-            print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
+                print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
-        evaluate(args, model, device, test_loader, is_test_set=True)
-        print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
+            evaluate(args, model, device, test_loader, is_test_set=True)
+            print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
+        print_and_log('Param END {0}'.format(param))
+        print_and_log('$'*80)
 
 if __name__ == '__main__':
    main()
