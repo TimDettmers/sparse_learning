@@ -146,7 +146,7 @@ plt.title("Momentum Parameter Sensivity")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-plt.show()
+#plt.show()
 plt.clf()
 
 
@@ -171,3 +171,39 @@ print(stats.normaltest(dense_data))
 #print(stats.normaltest(np.log10(dense_data+1-dense_data.min())))
 print(stats.wilcoxon(sparse_data, dense_data))
 
+data_vgg = pd.read_csv('./results/sensivity_prune_rate_vgg-d.csv')
+data_alexnet = pd.read_csv('./results/sensivity_prune_rate_alexnet-s.csv')
+
+data_vgg.iloc[0:, 1:] *= 100.0
+data_alexnet.iloc[0:, 1:] *= 100.0
+
+data_alexnet.loc[0:, 'cosine SE'] *= 1.96 # 95% confidence intervals
+data_alexnet.loc[0:, 'linear SE'] *= 1.96
+
+data_vgg.loc[0:, 'cosine SE'] *= 1.96 # 95% confidence intervals
+data_vgg.loc[0:, 'linear SE'] *= 1.96
+
+plt.plot(data_vgg['prune_rate'], data_vgg['cosine mean'], color='black', label='Cosine annealing')
+plt.plot(data_vgg['prune_rate'], data_vgg['linear mean'], color=orange, label='Linear annealing')
+plt.legend()
+plt.plot(data_alexnet['prune_rate'], data_alexnet['cosine mean'], color='black')#, label='Cosine annealing')
+plt.plot(data_alexnet['prune_rate'], data_alexnet['linear mean'], color=orange)#, label='Linear annealing')
+plt.annotate('AlexNet-s', xy=(0.25, 13.7), xytext=(0.2, 10),
+            arrowprops=dict(facecolor='black', shrink=0.05))
+plt.annotate('VGG16-D', xy=(0.45, 7.0), xytext=(0.40, 10),
+            arrowprops=dict(facecolor='black', shrink=0.05))
+plt.errorbar(data_vgg['prune_rate'], data_vgg['cosine mean'], yerr=data_vgg['cosine SE'], fmt='.k', capsize=5)
+plt.errorbar(data_vgg['prune_rate'], data_vgg['linear mean'], yerr=data_vgg['linear SE'], fmt='.k', ecolor=orange, capsize=5)
+plt.errorbar(data_alexnet['prune_rate'], data_alexnet['cosine mean'], yerr=data_alexnet['cosine SE'], fmt='.k', capsize=5)
+plt.errorbar(data_alexnet['prune_rate'], data_alexnet['linear mean'], yerr=data_alexnet['linear SE'], fmt='.k', ecolor=orange, capsize=5)
+
+#plt.ylim(0.927*factor, 0.95*factor)
+#plt.xlim(0.49, 0.99)
+plt.xticks([0.7, 0.8, 0.6, 0.5, 0.4, 0.3, 0.2])
+plt.ylabel("Test Error")
+plt.xlabel('Prune Rate')
+plt.title("Prune Rate Parameter Sensivity")
+#plt.subplots_adjust(bottom=-0.7)
+plt.tight_layout()#rect=[0,0.0,1.0,1])
+
+plt.show()
