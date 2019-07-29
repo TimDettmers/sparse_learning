@@ -202,11 +202,11 @@ def main():
     print_and_log('='*80)
     print_and_log('='*80)
     torch.manual_seed(args.seed)
-    print_and_log('PARAM = MOMENTUM')
-    for param in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:
+    print_and_log('PARAM = NONE')
+    for param in [0.00]:
         print_and_log('$'*80)
         print_and_log('Param START {0}'.format(param))
-        args.prune_rate = param
+        #args.prune_rate = param
         setup_logger(args)
         print_and_log(args)
         for i in range(args.iters):
@@ -280,8 +280,8 @@ def main():
             print(optimizer)
             mask = None
             if not args.dense:
-                #decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
-                decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
+                decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+                #decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
                 mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
                                verbose=args.verbose, fp16=args.fp16)
                 mask.add_module(model, density=args.density)
