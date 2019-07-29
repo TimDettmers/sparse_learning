@@ -21,7 +21,7 @@ from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
-    parser.add_argument('--prune-mode', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
+    parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
     parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, magnitude, nonzeros, or none.')
     parser.add_argument('--prune-rate', type=float, default=0.50, help='The pruning rate / prune rate.')
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
