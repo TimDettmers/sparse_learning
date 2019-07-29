@@ -607,6 +607,7 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
     end = time.time()
     epoch_start_time = time.time()
     for i, (input, target) in enumerate(train_loader):
+        #if i == 300: break
         data_time.update(time.time() - end)
 
         target = target.cuda()
@@ -644,7 +645,10 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
         # compute gradient and do SGD step
         optimizer.zero_grad()
         adjusted_loss = loss
-        adjusted_loss.backward()
+        if args.fp16:
+            optimizer.backward(loss)
+        else:
+            adjusted_loss.backward()
 
         DeepR_std = np.sqrt(2 * args.DeepR_eta * DeepR_temperature)
         if args.DeepR and epoch < args.stop_rewire_epoch:

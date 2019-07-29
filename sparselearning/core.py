@@ -138,9 +138,17 @@ class Masking(object):
         self.half = fp16
         self.name_to_32bit = {}
 
+
+    def init_optimizer(self):
+        if 'fp32_from_fp16' in self.optimizer.state_dict():
+            for (name, tensor), tensor2 in zip(self.modules[0].named_parameters(), self.optimizer.state_dict()['fp32_from_fp16'][0]):
+                self.name_to_32bit[name] = tensor2
+            self.half = True
+
     def init(self, mode='enforce_density_per_layer', density=0.05):
         self.sparsity = density
         self.init_growth_prune_and_redist()
+        self.init_optimizer()
         if mode == 'enforce_density_per_layer':
             self.baseline_nonzero = 0
             for module in self.modules:
@@ -314,6 +322,9 @@ class Masking(object):
                         tensor.data = tensor.data*self.masks[name]
                     else:
                         tensor.data = tensor.data*self.masks[name].half()
+                        if name in self.name_to_32bit:
+                            tensor2 = self.name_to_32bit[name]
+                            tensor2.data = tensor2.data*self.masks[name]
 
     def adjust_prune_rate(self):
         for module in self.modules:
