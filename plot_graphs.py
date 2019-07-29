@@ -206,4 +206,119 @@ plt.title("Prune Rate Parameter Sensivity")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
+#plt.show()
+plt.clf()
+
+d = pd.read_csv('./results/MNIST_compression_comparison_lenet300-100.csv')
+print(d)
+
+labels = set(d.loc[:, 'name'].tolist())
+
+fig, ax = plt.subplots()
+x, y = d['density'], d['error']
+for lbl in labels:
+    if lbl == 'Sparse Momentum': continue
+    cond = d['name'] == lbl
+    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl)
+
+cond = d['name'] == 'Sparse Momentum'
+plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
+plt.legend()
+plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond], fmt='.k', capsize=5, ecolor=orange)
+names = [\
+'LeCun 1989',
+'Dong 2017',
+'Carreira-Perpinan 2018',
+'Lee 2019',
+'Ullrich 2017',
+'Guo 2016',
+'Han 2015',
+'Lee 2019',
+'Molchanov 2017']
+
+diff_pos = [\
+(-0.7, 0.001),
+(-0.5, 0),
+(0, 0),
+(0, 0),
+(0, 0),
+(-0.1, 0.04),
+(-0.7, 0),
+(0, 0),
+(0, -0.05)]
+
+print(len(diff_pos), len(names))
+
+for name, x, y, diff in zip(d.loc[:, 'author'], d.loc[:, 'density'], d.loc[:, 'error'], diff_pos):
+    if name == 'Dettmers 2019': continue
+    if name == 'Dong 2017':
+        ax.annotate(name, xy=(x, y), xytext=(0.5, 1.5),
+                arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
+                connectionstyle="angle3", lw=1))
+            #arrowprops=dict(facecolor='black', shrink=0.01))
+    else:
+        ax.annotate(name, (x+diff[0]-0.01, y+diff[1]))
+plt.ylabel("Test Error")
+plt.xlabel('Weights (%)')
+plt.title("MNIST")
+#plt.subplots_adjust(bottom=-0.7)
+plt.tight_layout()#rect=[0,0.0,1.0,1])
+
+#plt.show()
+plt.clf()
+
+
+d = pd.read_csv('./results/MNIST_compression_comparison_lenet5.csv')
+print(d)
+
+labels = set(d.loc[:, 'name'].tolist())
+fig, ax = plt.subplots()
+x, y = d['density'], d['error']
+for lbl in labels:
+    if lbl == 'Sparse Momentum': continue
+    cond = d['name'] == lbl
+    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl)
+
+cond = d['name'] == 'Sparse Momentum'
+plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
+plt.legend()
+plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond], fmt='.k', capsize=5, ecolor=orange)
+names = [\
+'LeCun 1989',
+'Dong 2017',
+'Carreira-Perpinan 2018',
+'Lee 2019',
+'Ullrich 2017',
+'Guo 2016',
+'Han 2015',
+'Lee 2019',
+'Molchanov 2017']
+
+diff_pos = [\
+(-0.7, 0.001),
+(-0.5, 0),
+(0, 0.09),
+(0, 0),
+(0, 0),
+(0.1, 0.00),
+(-0.7, 0),
+(0, 0),
+(0, -0.09)]
+
+print(len(diff_pos), len(names))
+
+for name, x, y, diff in zip(d.loc[:, 'author'], d.loc[:, 'density'], d.loc[:, 'error'], diff_pos):
+    if name == 'Dettmers 2019': continue
+    #if name == 'Dong 2017':
+        #ax.annotate(name, xy=(x, y), xytext=(0.5, 1.5),
+        #        arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
+        #        connectionstyle="angle3", lw=1))
+    else:
+        ax.annotate(name, (x+diff[0]-0.01, y+diff[1]))
+plt.ylabel("Test Error")
+plt.xlabel('Weights (%)')
+plt.title("MNIST")
+#plt.subplots_adjust(bottom=-0.7)
+plt.tight_layout()#rect=[0,0.0,1.0,1])
+
 plt.show()
