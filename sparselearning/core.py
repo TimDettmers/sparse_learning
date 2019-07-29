@@ -44,20 +44,18 @@ class CosineDecay(object):
         return self.sgd.param_groups[0]['lr']
 
 class LinearDecay(object):
-    """Decays a pruning rate linearly with each step."""
-    def __init__(self, prune_rate, factor=0.99, frequency=600):
-        self.factor = factor
+    """Anneals the pruning rate linearly with each step."""
+    def __init__(self, prune_rate, T_max):
         self.steps = 0
-        self.frequency = frequency
+        self.decrement = prune_rate/float(T_max)
+        self.current_prune_rate = prune_rate
 
     def step(self):
         self.steps += 1
+        self.current_prune_rate -= self.decrement
 
     def get_dr(self, prune_rate):
-        if self.steps > 0 and self.steps % self.frequency == 0:
-            return prune_rate*self.factor
-        else:
-            return prune_rate
+        return self.current_prune_rate
 
 
 
