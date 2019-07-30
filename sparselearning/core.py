@@ -21,7 +21,7 @@ from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
-    parser.add_argument('--prune-mode', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
+    parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
     parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, magnitude, nonzeros, or none.')
     parser.add_argument('--prune-rate', type=float, default=0.50, help='The pruning rate / prune rate.')
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
@@ -44,20 +44,18 @@ class CosineDecay(object):
         return self.sgd.param_groups[0]['lr']
 
 class LinearDecay(object):
-    """Decays a pruning rate linearly with each step."""
-    def __init__(self, prune_rate, factor=0.99, frequency=600):
-        self.factor = factor
+    """Anneals the pruning rate linearly with each step."""
+    def __init__(self, prune_rate, T_max):
         self.steps = 0
-        self.frequency = frequency
+        self.decrement = prune_rate/float(T_max)
+        self.current_prune_rate = prune_rate
 
     def step(self):
         self.steps += 1
+        self.current_prune_rate -= self.decrement
 
     def get_dr(self, prune_rate):
-        if self.steps > 0 and self.steps % self.frequency == 0:
-            return prune_rate*self.factor
-        else:
-            return prune_rate
+        return self.current_prune_rate
 
 
 
@@ -264,7 +262,7 @@ class Masking(object):
         self.truncate_weights()
         if self.verbose:
             self.print_nonzero_counts()
-        self.reset_momentum()
+        #self.reset_momentum()
 
     def step(self):
         self.optimizer.step()
@@ -277,7 +275,7 @@ class Masking(object):
         if self.prune_every_k_steps is not None:
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights()
-                self.reset_momentum()
+                #self.reset_momentum()
                 if self.verbose:
                     self.print_nonzero_counts()
 

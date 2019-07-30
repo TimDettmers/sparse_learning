@@ -14,7 +14,7 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay
+from sparselearning.core import Masking, CosineDecay, LinearDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -202,8 +202,8 @@ def main():
     print_and_log('='*80)
     print_and_log('='*80)
     torch.manual_seed(args.seed)
-    print_and_log('PARAM = MOMENTUM')
-    for param in [0.0]:
+    print_and_log('PARAM = NONE')
+    for param in [0.00]:
         print_and_log('$'*80)
         print_and_log('Param START {0}'.format(param))
         #args.prune_rate = param
@@ -281,6 +281,7 @@ def main():
             mask = None
             if not args.dense:
                 decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+                #decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
                 mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
                                verbose=args.verbose, fp16=args.fp16)
                 mask.add_module(model, density=args.density)
