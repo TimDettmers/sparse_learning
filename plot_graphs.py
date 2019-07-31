@@ -39,15 +39,16 @@ plt.plot(mnist['Sparsity'], mnist['Sparse Momentum'], color=orange)
 plt.plot(mnist['Sparsity'], mnist['SET'], color=purple)
 plt.plot(mnist['Sparsity'], mnist['DEEP-R'], color=yellow)
 plt.legend()
-plt.errorbar(mnist['Sparsity'], mnist['Full Dense'], yerr=mnist['error1']*percentile95, fmt='.k', capsize=5)
-plt.errorbar(mnist['Sparsity'], mnist['Dynamic Sparse'], yerr=mnist['error2']*percentile95, fmt='.k', ecolor=blue, capsize=5)
-plt.errorbar(mnist['Sparsity'], mnist['Sparse Momentum'], yerr=mnist['error3']*percentile95, fmt='.k', ecolor=orange, capsize=5)
-plt.errorbar(mnist['Sparsity'], mnist['SET'], yerr=mnist['error4']*percentile95, fmt='.k', ecolor=purple, capsize=5)
+plt.errorbar(mnist['Sparsity'], mnist['Full Dense'], yerr=mnist['error1']*percentile95, fmt='.k', capsize=5, elinewidth=1)
+plt.errorbar(mnist['Sparsity'], mnist['Dynamic Sparse'], yerr=mnist['error2']*percentile95, fmt='.k', ecolor=blue, capsize=5, elinewidth=1)
+plt.errorbar(mnist['Sparsity'], mnist['Sparse Momentum'], yerr=mnist['error3']*percentile95, fmt='.k', ecolor=orange, capsize=5, elinewidth=1)
+plt.errorbar(mnist['Sparsity'], mnist['SET'], yerr=mnist['error4']*percentile95, fmt='.k', ecolor=purple, capsize=5, elinewidth=1)
 plt.errorbar(mnist['Sparsity'], mnist['DEEP-R'], yerr=mnist['error5']*percentile95, fmt='.k', ecolor=yellow, capsize=5)
 
+#plt.yscale('log')
 plt.ylim(0.975*factor, 0.990*factor)
 plt.xlim(0.00*factor, 0.21*factor)
-plt.xticks([1, 2, 3, 4, 5, 20])
+plt.xticks([1, 2, 3, 4, 5, 10])
 plt.ylabel("Test Accuracy")
 plt.xlabel('Weights (%)')
 plt.title("LeNet 300-100 on MNIST")
@@ -146,7 +147,7 @@ plt.title("Momentum Parameter Sensivity")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-#plt.show()
+plt.show()
 plt.clf()
 
 
@@ -168,7 +169,7 @@ dense_data = np.array(dense_data)
 print(stats.levene(sparse_data, dense_data))
 print(stats.normaltest(sparse_data))
 print(stats.normaltest(dense_data))
-#print(stats.normaltest(np.log10(dense_data+1-dense_data.min())))
+print(stats.normaltest(np.log10(dense_data+1-dense_data.min())))
 print(stats.wilcoxon(sparse_data, dense_data))
 
 data_vgg = pd.read_csv('./results/sensivity_prune_rate_vgg-d.csv')
@@ -215,6 +216,8 @@ print(d)
 labels = set(d.loc[:, 'name'].tolist())
 
 fig, ax = plt.subplots()
+
+#ax.set_facecolor('white')
 x, y = d['density'], d['error']
 for lbl in labels:
     if lbl == 'Sparse Momentum': continue
@@ -223,8 +226,11 @@ for lbl in labels:
 
 cond = d['name'] == 'Sparse Momentum'
 plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
+plt.plot([0,9.0], [1.34, 1.34], label='Dense (100% Weights)', color='black')
 plt.legend()
-plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond], fmt='.k', capsize=5, ecolor=orange)
+plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond]*1.96, fmt='.k', capsize=5, ecolor=orange)
+plt.errorbar([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1.34]*10, yerr=[0.011*1.96]*10, fmt='.k', capsize=5, ecolor='black')
+
 names = [\
 'LeCun 1989',
 'Dong 2017',
@@ -234,34 +240,42 @@ names = [\
 'Guo 2016',
 'Han 2015',
 'Lee 2019',
-'Molchanov 2017']
+'Molchanov 2017',
+'Gomez 2018',
+'Gomez 2018']
 
 diff_pos = [\
 (-0.7, 0.001),
-(-0.5, 0),
+(-0.5, 0.0),
 (0, 0),
 (0, 0),
 (0, 0),
 (-0.1, 0.04),
 (-0.7, 0),
 (0, 0),
-(0, -0.05)]
+(-0.1, -0.15),
+(-1.0, -0.1),
+(-0.0, -0.0)]
 
 print(len(diff_pos), len(names))
 
+print(d)
+
 for name, x, y, diff in zip(d.loc[:, 'author'], d.loc[:, 'density'], d.loc[:, 'error'], diff_pos):
+    print(name)
     if name == 'Dettmers 2019': continue
     if name == 'Dong 2017':
-        ax.annotate(name, xy=(x, y), xytext=(0.5, 1.5),
+        ax.annotate(name, xy=(x, y), xytext=(0.5, 1.6),
                 arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
-                connectionstyle="angle3", lw=1))
+                connectionstyle="angle3", lw=1), size=10)
             #arrowprops=dict(facecolor='black', shrink=0.01))
     else:
-        ax.annotate(name, (x+diff[0]-0.01, y+diff[1]))
+        ax.annotate(name, (x+diff[0]-0.01, y+diff[1]), size=10)
 plt.ylabel("Test Error")
 plt.xlabel('Weights (%)')
-plt.title("MNIST")
+plt.title("LeNet 300-100 on MNIST")
 #plt.subplots_adjust(bottom=-0.7)
+plt.xlim(0.8, 10.5)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
 #plt.show()
@@ -270,6 +284,8 @@ plt.clf()
 
 d = pd.read_csv('./results/MNIST_compression_comparison_lenet5.csv')
 print(d)
+
+d = d.iloc[1:, :]
 
 labels = set(d.loc[:, 'name'].tolist())
 fig, ax = plt.subplots()
@@ -281,44 +297,55 @@ for lbl in labels:
 
 cond = d['name'] == 'Sparse Momentum'
 plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
+plt.plot([0,10.0], [0.58, 0.58], label='Dense (100% Weights)', color='black')
 plt.legend()
-plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond], fmt='.k', capsize=5, ecolor=orange)
+plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond]*1.96, fmt='.k', capsize=5, ecolor=orange)
+plt.errorbar([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [0.58]*10, yerr=[0.01*1.96]*10, fmt='.k', capsize=5, ecolor='black')
+
 names = [\
-'LeCun 1989',
+#'LeCun 1989',
 'Dong 2017',
-'Carreira-Perpinan 2018',
 'Lee 2019',
 'Ullrich 2017',
 'Guo 2016',
 'Han 2015',
 'Lee 2019',
-'Molchanov 2017']
+'Carreira-Perpinan 2018',
+'Molchanov 2017',
+'Gomez 2018',
+'Gomez 2018']
 
 diff_pos = [\
-(-0.7, 0.001),
-(-0.5, 0),
-(0, 0.09),
-(0, 0),
+#(-0.7, 0.001),
+(-0.5, 0.0),
+(0, 0.03),
 (0, 0),
 (0.1, 0.00),
-(-0.7, 0),
-(0, 0),
-(0, -0.09)]
+(-0.7, -0.05),
+(0, 0.02),
+(0.2, -0.05),
+(-0.35, -0.09),
+(-1.2, 0.00),
+(-1.0, 0.00)]
 
 print(len(diff_pos), len(names))
 
 for name, x, y, diff in zip(d.loc[:, 'author'], d.loc[:, 'density'], d.loc[:, 'error'], diff_pos):
+    print(name, x, y)
     if name == 'Dettmers 2019': continue
-    #if name == 'Dong 2017':
-        #ax.annotate(name, xy=(x, y), xytext=(0.5, 1.5),
-        #        arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
-        #        connectionstyle="angle3", lw=1))
-    else:
-        ax.annotate(name, (x+diff[0]-0.01, y+diff[1]))
+
+    #if name == 'Lee 2018':
+    #    ax.annotate(name, xy=(x, y), xytext=(0.6, 1.2),
+    #            arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
+    #            connectionstyle="arc3", lw=1), size=10)
+    #else:
+    #    ax.annotate(name, (x+diff[0]-0.01, y+diff[1]), size=10)
+    ax.annotate(name, (x+diff[0]-0.01, y+diff[1]), size=10)
 plt.ylabel("Test Error")
 plt.xlabel('Weights (%)')
-plt.title("MNIST")
+plt.xlim(0.0, 10.5)
+plt.title("LeNet-5 Caffe on MNIST")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-plt.show()
+#plt.show()

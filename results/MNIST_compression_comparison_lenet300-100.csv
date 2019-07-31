@@ -8,6 +8,8 @@ Dyn. Network Surgery,Guo 2016,1.8,2,
 Learn weights&connections,Han 2015,8.3,1.6,
 Single-shot Net. Pruning,Lee 2019,5,1.6,
 Variational Dropout,Molchanov 2017,1.5,1.9,
+Targeted Dropout,Gomez 2018,5.0,3.13,
+Targeted Dropout,Gomez 2018,2.0,3.77,
 Sparse Momentum,Dettmers 2019,1,2.36,0.044
 Sparse Momentum,Dettmers 2019,1.5,2.053,0.032
 Sparse Momentum,Dettmers 2019,1.8,1.984,0.053

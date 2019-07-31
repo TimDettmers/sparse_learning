@@ -1,13 +1,15 @@
 name,author,density,error,sm SE
 Opt. Brain Damage,LeCun 1989,8,2.7,
 Layer-wise Brain Damage,Dong 2017,1,2.1,
-Compression via optimization,Carreira-Perpinan 2018,1,1.1,
 Single-shot Net. Pruning,Lee 2019,1,1.1,
 Soft weight-sharing,Ullrich 2017,0.5,1,
 Dyn. Network Surgery,Guo 2016,0.9,0.9,
 Learn weights&connections,Han 2015,9.3,0.8,
 Single-shot Net. Pruning,Lee 2019,2,0.8,
+Compression via optimization,Carreira-Perpinan 2018,1,1.1,
 Variational Dropout,Molchanov 2017,0.4,0.8,
+Targeted Dropout,Gomez 2018,5.0,1.96,
+Targeted Dropout,Gomez 2018,10.0,1.95,
 Sparse Momentum,Dettmers 2019,0.4,1.403,0.088
 Sparse Momentum,Dettmers 2019,0.5,1.144,0.024
 Sparse Momentum,Dettmers 2019,0.9,0.894,0.033
