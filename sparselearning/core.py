@@ -155,6 +155,17 @@ class Masking(object):
                     self.masks[name][:] = (torch.rand(weight.shape) < density).float().data.cuda()
                     self.baseline_nonzero += weight.numel()*density
             self.apply_mask()
+        elif mode == 'resume':
+            self.baseline_nonzero = 0
+            for module in self.modules:
+                for name, weight in module.named_parameters():
+                    if name not in self.masks: continue
+                    print((weight != 0.0).sum().item())
+                    if name in self.name_to_32bit:
+                        print('W2')
+                    self.masks[name][:] = (weight != 0.0).float().data.cuda()
+                    self.baseline_nonzero += weight.numel()*density
+            self.apply_mask()
         elif mode == 'size_proportional':
             # initialization used in sparse evolutionary training
             total_params = 0

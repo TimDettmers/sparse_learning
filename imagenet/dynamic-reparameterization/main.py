@@ -395,12 +395,13 @@ def main():
     mask = None
     if not args.dense:
         decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+        for i in range(len(train_loader)*90):
+            decay.cosine_stepper.step()
         mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode='magnitude', growth_mode=args.growth, redistribution_mode=args.redistribution,
                        verbose=args.verbose, fp16=args.fp16)
         mask.add_module(model, density=args.density)
         mask.remove_weight_partial_name('downsample')
         mask.remove_weight('conv1.weight')
-        mask.init(mode='enforce_density_per_layer', density=args.density)
 
 
     if dataset == 'imagenet':
@@ -418,7 +419,9 @@ def main():
             #args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             if 'optimizer' in checkpoint:
-                  optimizer.load_state_dict(checkpoint['optimizer'])
+                optimizer.load_state_dict(checkpoint['optimizer'])
+                print('OPTIM')
+                mask.optimizer = optimizer
             print("=> loaded checkpoint '{}' "
                   .format(args.resume))
         else:
@@ -436,6 +439,7 @@ def main():
             
             
         
+    mask.init(mode='resume', density=args.density)
     # get the number of model parameters
     model_size = base_model.get_model_size()
         
