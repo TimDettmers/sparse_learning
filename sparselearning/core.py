@@ -262,7 +262,7 @@ class Masking(object):
         self.truncate_weights()
         if self.verbose:
             self.print_nonzero_counts()
-        #self.reset_momentum()
+        self.reset_momentum()
 
     def step(self):
         self.optimizer.step()
@@ -275,7 +275,7 @@ class Masking(object):
         if self.prune_every_k_steps is not None:
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights()
-                #self.reset_momentum()
+                self.reset_momentum()
                 if self.verbose:
                     self.print_nonzero_counts()
 
