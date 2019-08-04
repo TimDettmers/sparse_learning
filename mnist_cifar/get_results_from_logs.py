@@ -2,15 +2,22 @@ import glob
 import numpy as np
 import argparse
 
+from os.path import join
+
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
 parser.add_argument('--all', action='store_true', help='Displays individual final results.')
+parser.add_argument('--folder-path', type=str, default=None, help='The folder to evaluate if running in folder mode.')
 
 args = parser.parse_args()
 
 
-for log_name in glob.iglob('./logs/*.log'):
-    losses = []
-    accs = []
+losses = []
+accs = []
+folder = args.folder_path if args.folder_path else './logs'
+for log_name in glob.iglob(join(folder, '*.log')):
+    if not args.folder_path:
+        losses = []
+        accs = []
     arg = None
     with open(log_name) as f:
         for line in f:
@@ -31,8 +38,34 @@ for log_name in glob.iglob('./logs/*.log'):
     loss_se = loss_std/np.sqrt(len(losses))
 
 
+    if not args.folder_path:
+        print('='*85)
+        print('Test set results for log: {0}'.format(log_name))
+        print('Arguments:\n{0}\n'.format(arg))
+        print('Accuracy. Median: {5:.5f}, Mean: {0:.5f}, Standard Error: {1:.5f}, Sample size: {2}, 95% CI: ({3:.5f},{4:.5f})'.format(np.mean(accs), acc_se, len(accs),
+            np.mean(accs)-(1.96*acc_se), np.mean(accs)+(1.96*acc_se), np.median(accs)))
+        print('Error.    Median: {5:.5f}, Mean: {0:.5f}, Standard Error: {1:.5f}, Sample size: {2}, 95% CI: ({3:.5f},{4:.5f})'.format(1.0-np.mean(accs), acc_se, len(accs),
+            (1.0-np.mean(accs))-(1.96*acc_se), (1.0-np.mean(accs))+(1.96*acc_se), 1.0-np.median(accs)))
+        print('Loss.     Median: {5:.5f}, Mean: {0:.5f}, Standard Error: {1:.5f}, Sample size: {2}, 95% CI: ({3:.5f},{4:.5f})'.format(np.mean(losses), loss_se, len(losses),
+            np.mean(losses)-(1.96*loss_se), np.mean(losses)+(1.96*loss_se), np.median(losses)))
+        print('='*85)
+
+        if args.all:
+            print('Individual results:')
+            for loss, acc in zip(losses, accs):
+                err = 1.0-acc
+                print('Loss: {0:.5f}, Accuracy: {1:.5f}, Error: {2:.5f}'.format(loss, acc, err))
+
+if args.folder_path:
+    acc_std = np.std(accs, ddof=1)
+    acc_se = acc_std/np.sqrt(len(accs))
+
+    loss_std = np.std(losses, ddof=1)
+    loss_se = loss_std/np.sqrt(len(losses))
+
+
     print('='*85)
-    print('Test set results for log: {0}'.format(log_name))
+    print('Test set results logs in folder: {0}'.format(args.folder_path))
     print('Arguments:\n{0}\n'.format(arg))
     print('Accuracy. Median: {5:.5f}, Mean: {0:.5f}, Standard Error: {1:.5f}, Sample size: {2}, 95% CI: ({3:.5f},{4:.5f})'.format(np.mean(accs), acc_se, len(accs),
         np.mean(accs)-(1.96*acc_se), np.mean(accs)+(1.96*acc_se), np.median(accs)))
@@ -47,4 +80,7 @@ for log_name in glob.iglob('./logs/*.log'):
         for loss, acc in zip(losses, accs):
             err = 1.0-acc
             print('Loss: {0:.5f}, Accuracy: {1:.5f}, Error: {2:.5f}'.format(loss, acc, err))
+
+
+
 

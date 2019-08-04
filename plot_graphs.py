@@ -2,7 +2,85 @@ import seaborn as sns; sns.set()
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import matplotlib.cm as cm
+import hashlib
+
 from scipy import stats
+
+# diverging color-blind colors taken from: https://github.com/drammock/colorblind/blob/master/colorblind.py
+# @author: drmccloy
+# Created on Thu Sep  1 17:07:57 2016
+# License: MIT License
+def diverging_colors(n):
+    if n < 3:
+        raise ValueError('Minimum number of diverging colors is 3.')
+    elif n > 11:
+        raise ValueError('Maximum number of diverging colors is 11.')
+    cols = ['#3D52A1', '#3A89C9', '#008BCE', '#77B7E5', '#99C7EC', '#B4DDF7',
+            '#E6F5FE', '#FFFAD2', '#FFE3AA', '#F9BD7E', '#F5A275', '#ED875E',
+            '#D03232', '#D24D3E', '#AE1C3E']
+    indices = [[4, 7, 10],
+               [2, 5, 9, 12],
+               [2, 5, 7, 9, 12],
+               [1, 4, 6, 8, 10, 13],
+               [1, 4, 6, 7, 8, 10, 13],
+               [1, 3, 5, 6, 8, 9, 11, 13],
+               [1, 3, 5, 6, 7, 8, 9, 11, 13],
+               [0, 1, 3, 5, 6, 8, 9, 11, 13, 14],
+               [0, 1, 3, 5, 6, 7, 8, 9, 11, 13, 14]]
+    return [cols[ix] for ix in indices[n - 3]]
+
+def sequential_colors(n):
+    if n < 3:
+        raise ValueError('Minimum number of sequential colors is 3.')
+    elif n > 9:
+        raise ValueError('Maximum number of sequential colors is 9.')
+    cols = ['#FFFFE5', '#FFFBD5', '#FFF7BC', '#FEE391', '#FED98E', '#FEC44F',
+            '#FB9A29', '#EC7014', '#D95F0E', '#CC4C02', '#993404', '#8C2D04',
+            '#662506']
+    indices = [[2, 5, 8],
+               [1, 3, 6, 9],
+               [1, 3, 6, 8, 10],
+               [1, 3, 5, 6, 8, 10],
+               [1, 3, 5, 6, 7, 9, 10],
+               [0, 2, 3, 5, 6, 7, 9, 10],
+               [0, 2, 3, 5, 6, 7, 9, 10, 12]]
+    return [cols[ix] for ix in indices[n - 3]]
+
+def rainbow_colors(n):
+    if n < 4:
+        raise ValueError('Minimum number of rainbow colors is 4.')
+    elif n > 12:
+        raise ValueError('Maximum number of rainbow colors is 12.')
+    c = ['#781C81', '#404096', '#57A3AD', '#529DB7', '#63AD99', '#6DB388',
+         '#E39C37', '#D92120']
+    cols = [[c[1], c[2], '#DEA73A', c[7]],
+            [c[1], c[3], '#7DB874', c[6], c[7]],
+            [c[1], '#498CC2', c[4], '#BEBC48', '#E68B33', c[7]],
+            [c[0], '#3F60AE', '#539EB6', c[5], '#CAB843', '#E78532', c[7]],
+            [c[0], '#3F56A7', '#4B91C0', '#5FAA9F', '#91BD61', '#D8AF3D',
+             '#E77C30', c[7]],
+            [c[0], '#3F4EA1', '#4683C1', c[2], c[5], '#B1BE4E', '#DFA53A',
+             '#E7742F', c[7]],
+            [c[0], '#3F479B', '#4277BD', c[3], '#62AC9B', '#86BB6A', '#C7B944',
+             c[6], '#E76D2E', c[7]],
+            [c[0], c[1], '#416CB7', '#4D95BE', '#5BA7A7', '#6EB387', '#A1BE56',
+             '#D3B33F', '#E59435', '#E6682D', c[7]],
+            [c[0], '#413B93', '#4065B1', '#488BC2', '#55A1B1', c[4], '#7FB972',
+             '#B5BD4C', '#D9AD3C', '#E68E34', '#E6642C', c[7]]
+            ]
+    return cols[n - 4]
+
+colors = rainbow_colors(9)
+
+def get_name2color(names, n, seed=0):
+    name2color = {}
+    names = np.array(names)
+    rdm = np.random.RandomState(seed)
+    rdm.shuffle(names)
+    for i, name in enumerate(names):
+        name2color[name] = colors[i]
+    return name2color
 
 factor=100
 
@@ -96,8 +174,8 @@ plt.title("WRN 28-2 on CIFAR-10")
 #plt.show()
 plt.clf()
 
-data_vgg = pd.read_csv('./results/sensivity_momentum_vgg-d.csv')
-data_alexnet = pd.read_csv('./results/sensivity_momentum_alexnet-s.csv')
+data_vgg = pd.read_csv('./results/sensitivity_momentum_vgg-d.csv')
+data_alexnet = pd.read_csv('./results/sensitivity_momentum_alexnet-s.csv')
 
 data_vgg = data_vgg.iloc[1:, :]
 data_alexnet = data_alexnet.iloc[1:, :]
@@ -143,11 +221,11 @@ plt.xlim(0.49, 0.99)
 plt.xticks([0.95, 0.9, 0.8, 0.7, 0.6, 0.5])
 plt.ylabel("Test Error")
 plt.xlabel('Momentum')
-plt.title("Momentum Parameter Sensivity")
+plt.title("Momentum Parameter Sensitivity")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-plt.show()
+#plt.show()
 plt.clf()
 
 
@@ -172,8 +250,8 @@ print(stats.normaltest(dense_data))
 print(stats.normaltest(np.log10(dense_data+1-dense_data.min())))
 print(stats.wilcoxon(sparse_data, dense_data))
 
-data_vgg = pd.read_csv('./results/sensivity_prune_rate_vgg-d.csv')
-data_alexnet = pd.read_csv('./results/sensivity_prune_rate_alexnet-s.csv')
+data_vgg = pd.read_csv('./results/sensitivity_prune_rate_vgg-d.csv')
+data_alexnet = pd.read_csv('./results/sensitivity_prune_rate_alexnet-s.csv')
 
 data_vgg.iloc[0:, 1:] *= 100.0
 data_alexnet.iloc[0:, 1:] *= 100.0
@@ -203,7 +281,7 @@ plt.errorbar(data_alexnet['prune_rate'], data_alexnet['linear mean'], yerr=data_
 plt.xticks([0.7, 0.8, 0.6, 0.5, 0.4, 0.3, 0.2])
 plt.ylabel("Test Error")
 plt.xlabel('Prune Rate')
-plt.title("Prune Rate Parameter Sensivity")
+plt.title("Prune Rate Parameter Sensitivity")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
@@ -213,16 +291,25 @@ plt.clf()
 d = pd.read_csv('./results/MNIST_compression_comparison_lenet300-100.csv')
 print(d)
 
-labels = set(d.loc[:, 'name'].tolist())
+labels = d.loc[:, 'name'].tolist()[1:]
+unique = []
+# necessary to get same colors for the same seed
+for lbl in labels:
+    if lbl not in unique:
+        unique.append(lbl)
+labels = unique
 
 fig, ax = plt.subplots()
 
 #ax.set_facecolor('white')
 x, y = d['density'], d['error']
+i = 0
+name2color = get_name2color(labels, len(labels), seed=4)
 for lbl in labels:
+    color = name2color[lbl]
     if lbl == 'Sparse Momentum': continue
     cond = d['name'] == lbl
-    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl)
+    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl, color=color)
 
 cond = d['name'] == 'Sparse Momentum'
 plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
@@ -246,14 +333,14 @@ names = [\
 
 diff_pos = [\
 (-0.7, 0.001),
-(-0.5, 0.0),
+(-0.65, 0.07),
 (0, 0),
 (0, 0),
 (0, 0),
-(-0.1, 0.04),
+(0.1, -0.13),
 (-0.7, 0),
 (0, 0),
-(-0.1, -0.15),
+(-0.65, -0.15),
 (-1.0, -0.1),
 (-0.0, -0.0)]
 
@@ -261,16 +348,20 @@ print(len(diff_pos), len(names))
 
 print(d)
 
+i = 0
 for name, x, y, diff in zip(d.loc[:, 'author'], d.loc[:, 'density'], d.loc[:, 'error'], diff_pos):
     print(name)
+    if name == 'LeCun 1989': continue
     if name == 'Dettmers 2019': continue
-    if name == 'Dong 2017':
-        ax.annotate(name, xy=(x, y), xytext=(0.5, 1.6),
-                arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
-                connectionstyle="angle3", lw=1), size=10)
-            #arrowprops=dict(facecolor='black', shrink=0.01))
+    #if name == 'Dong 2017':
+    #    ax.annotate(name, xy=(x, y), xytext=(0.5, 1.6),
+    #            arrowprops=dict(color='black', facecolor='black',arrowstyle="-", \
+    #            connectionstyle="angle3", lw=1), size=10)
+    #        #arrowprops=dict(facecolor='black', shrink=0.01))
     else:
+        #color = cm.get_cmap(name=name, lut=10)
         ax.annotate(name, (x+diff[0]-0.01, y+diff[1]), size=10)
+    i += 1
 plt.ylabel("Test Error")
 plt.xlabel('Weights (%)')
 plt.title("LeNet 300-100 on MNIST")
@@ -278,7 +369,7 @@ plt.title("LeNet 300-100 on MNIST")
 plt.xlim(0.8, 10.5)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-#plt.show()
+plt.show()
 plt.clf()
 
 
@@ -292,13 +383,14 @@ fig, ax = plt.subplots()
 x, y = d['density'], d['error']
 for lbl in labels:
     if lbl == 'Sparse Momentum': continue
+    color = name2color[lbl]
     cond = d['name'] == lbl
-    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl)
+    plt.plot(x[cond], y[cond], linestyle='none', marker='o', label=lbl, color=color)
 
 cond = d['name'] == 'Sparse Momentum'
 plt.plot(x[cond], y[cond], color=orange, label='Sparse Momentum')
 plt.plot([0,10.0], [0.58, 0.58], label='Dense (100% Weights)', color='black')
-plt.legend()
+#plt.legend()
 plt.errorbar(x[cond], y[cond], yerr=d['sm SE'][cond]*1.96, fmt='.k', capsize=5, ecolor=orange)
 plt.errorbar([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [0.58]*10, yerr=[0.01*1.96]*10, fmt='.k', capsize=5, ecolor='black')
 
@@ -348,4 +440,4 @@ plt.title("LeNet-5 Caffe on MNIST")
 #plt.subplots_adjust(bottom=-0.7)
 plt.tight_layout()#rect=[0,0.0,1.0,1])
 
-#plt.show()
+plt.show()
