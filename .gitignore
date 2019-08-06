@@ -121,4 +121,5 @@ dynamic_sparse/data
 dynamic_sparse/runs/*
 mnist_cifar/_dataset*
 data
-imagenet/dynamic-reparameterization/runs
+imagenet/partially_dense/runs*
+
