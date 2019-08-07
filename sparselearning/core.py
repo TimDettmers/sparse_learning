@@ -236,11 +236,11 @@ class Masking(object):
             raise Exception('Unknown growth mode.')
 
         if isinstance(self.prune_func, str) and self.prune_func in prune_funcs:
-            if 'global' in self.prune_func: self.prune_growth = True
+            if 'global' in self.prune_func: self.global_prune = True
             self.prune_func = prune_funcs[self.prune_func]
         elif isinstance(self.prune_func, str):
             print('='*50, 'ERROR', '='*50)
-            print('Prrune mode function not known: {0}.'.format(self.prune_func))
+            print('Prune mode function not known: {0}.'.format(self.prune_func))
             print('Use either a custom prune function or one of the pre-defined functions:')
             for key in prune_funcs:
                 print('\t{0}'.format(key))
@@ -428,7 +428,14 @@ class Masking(object):
                 self.total_zero += self.name2zeros[name]
 
         for name in self.name2variance:
-            self.name2variance[name] /= self.total_variance
+            if self.total_variance != 0.0:
+                self.name2variance[name] /= self.total_variance
+            else:
+                print('Total variance was zero!')
+                print(self.growth_func)
+                print(self.prune_func)
+                print(self.redistribution_func)
+                print(self.name2variance)
 
     def calc_growth_redistribution(self):
         num_overgrowth = 0

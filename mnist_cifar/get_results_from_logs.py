@@ -22,7 +22,6 @@ else:
 losses = []
 accs = []
 for folder in folders:
-    print(folder)
     losses = []
     accs = []
     for log_name in glob.iglob(join(folder, '*.log')):
@@ -71,7 +70,9 @@ for folder in folders:
                     print('Loss: {0:.5f}, Accuracy: {1:.5f}, Error: {2:.5f}'.format(loss, acc, err))
 
     if args.folder_path:
-        if len(accs) == 0: continue
+        if len(accs) == 0:
+            print('Test set results logs in folder {0} empty!'.format(folder))
+            continue
         acc_std = np.std(accs, ddof=1)
         acc_se = acc_std/np.sqrt(len(accs))
 
@@ -79,7 +80,7 @@ for folder in folders:
         loss_se = loss_std/np.sqrt(len(losses))
 
         print('='*85)
-        print('Test set results logs in folder: {0}'.format(args.folder_path))
+        print('Test set results logs in folder: {0}'.format(folder))
         print('Arguments:\n{0}\n'.format(arg))
         print('Accuracy. Median: {5:.5f}, Mean: {0:.5f}, Standard Error: {1:.5f}, Sample size: {2}, 95% CI: ({3:.5f},{4:.5f})'.format(np.mean(accs), acc_se, len(accs),
             np.mean(accs)-(1.96*acc_se), np.mean(accs)+(1.96*acc_se), np.median(accs)))
