@@ -203,11 +203,11 @@ def main():
         # add custom prune/growth/redisribution here
         if args.prune == 'magnitude_variance':
             args.prune = magnitude_variance_pruning
-            args.optimizer == 'adam'
+            args.optimizer = 'adam'
             args.lr /= 100.0
         if args.redistribution == 'variance':
             args.redistribution = variance_redistribution
-            args.optimizer == 'adam'
+            args.optimizer = 'adam'
             args.lr /= 100.0
 
         optimizer = None
