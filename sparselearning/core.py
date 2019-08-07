@@ -12,11 +12,6 @@ import os
 import shutil
 import time
 from matplotlib import pyplot as plt
-
-#from sparselearning.funcs import no_redistribution, momentum_redistribution, magnitude_redistribution, nonzero_redistribution
-#from sparselearning.funcs import global_momentum_growth, momentum_growth, random_growth, momentum_neuron_growth
-#from sparselearning.funcs import threshold_prune, magnitude_prune, global_magnitude_prune, magnitude_and_negativity_prune
-
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
 def add_sparse_args(parser):
@@ -491,8 +486,11 @@ class Masking(object):
                     name2regrowth[name] = math.floor((self.total_removed/float(expected_killed))*name2regrowth[name])
                 elif self.prune_mode == 'global_magnitude':
                     expected_removed = self.baseline_nonzero*self.name2prune_rate[name]
-                    expected_vs_actual = self.total_removed/expected_removed
-                    name2regrowth[name] = math.floor(expected_vs_actual*name2regrowth[name])
+                    if expected_removed == 0.0:
+                        name2regrowth[name] = 0.0
+                    else:
+                        expected_vs_actual = self.total_removed/expected_removed
+                        name2regrowth[name] = math.floor(expected_vs_actual*name2regrowth[name])
 
         return name2regrowth
 

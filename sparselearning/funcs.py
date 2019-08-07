@@ -271,6 +271,7 @@ def momentum_neuron_growth(masking, name, new_mask, total_regrowth, weight):
         y, idx = torch.sort(M[i].flatten())
         if neuron_regrowth > available:
             neuron_regrowth = available
+        # TODO: Work into more stable growth method
         threshold = y[-(neuron_regrowth)].item()
         if threshold == 0.0: continue
         if neuron_regrowth < 10: continue
