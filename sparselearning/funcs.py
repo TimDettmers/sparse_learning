@@ -53,9 +53,6 @@ def no_redistribution(masking, name, weight, mask):
 '''
                 PRUNE
 '''
-def threshold_prune(masking, mask, weight, name):
-    return (torch.abs(weight.data) > masking.threshold)
-
 def magnitude_prune(masking, mask, weight, name):
     """Prunes the weights with smallest magnitude.
 
@@ -129,22 +126,22 @@ def global_magnitude_prune(masking):
         for module in masking.modules:
             for name, weight in module.named_parameters():
                 if name not in masking.masks: continue
-                remain = (torch.abs(weight.data) > masking.threshold).sum().item()
+                remain = (torch.abs(weight.data) > masking.prune_threshold).sum().item()
                 total_removed += masking.name2nonzeros[name] - remain
 
         if prev_removed == total_removed: break
         prev_removed = total_removed
         if total_removed > tokill*(1.0+masking.tolerance):
-            masking.threshold *= 1.0-masking.increment
+            masking.prune_threshold *= 1.0-masking.increment
             masking.increment *= 0.99
         elif total_removed < tokill*(1.0-masking.tolerance):
-            masking.threshold *= 1.0+masking.increment
+            masking.prune_threshold *= 1.0+masking.increment
             masking.increment *= 0.99
 
     for module in masking.modules:
         for name, weight in module.named_parameters():
             if name not in masking.masks: continue
-            masking.masks[name][:] = torch.abs(weight.data) > masking.threshold
+            masking.masks[name][:] = torch.abs(weight.data) > masking.prune_threshold
 
     return int(total_removed)
 
@@ -327,7 +324,6 @@ def global_momentum_growth(masking, total_regrowth):
 prune_funcs = {}
 prune_funcs['magnitude'] = magnitude_prune
 prune_funcs['SET'] = magnitude_and_negativity_prune
-prune_funcs['threshold'] = threshold_prune
 prune_funcs['global_magnitude'] = global_magnitude_prune
 
 growth_funcs = {}

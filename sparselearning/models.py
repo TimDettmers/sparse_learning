@@ -293,7 +293,7 @@ class VGG16(nn.Module):
             )
 
     @staticmethod
-    def make_layers(config, batch_norm=False):  # TODO: BN yes or no?
+    def make_layers(config, batch_norm=False):
         layers = []
         in_channels = 3
         for v in config:

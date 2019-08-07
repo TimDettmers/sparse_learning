@@ -16,7 +16,7 @@ from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
-    parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET, threshold.')
+    parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET.')
     parser.add_argument('--redistribution', type=str, default='momentum', help='Redistribution mode. Choose from: momentum, magnitude, nonzeros, or none.')
     parser.add_argument('--prune-rate', type=float, default=0.50, help='The pruning rate / prune rate.')
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
@@ -77,7 +77,7 @@ class Masking(object):
       - `mask.remove_type(type)` removes all layers of a certain type. For example,
         mask.remove_type(torch.nn.BatchNorm2d) removes all 2D batch norm layers.
     """
-    def __init__(self, optimizer, prune_rate_decay, prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', threshold=0.001, global_growth=False, global_prune=False, verbose=False, fp16=False):
+    def __init__(self, optimizer, prune_rate_decay, prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', verbose=False, fp16=False):
         growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
@@ -93,8 +93,8 @@ class Masking(object):
         self.prune_func = prune_mode
         self.redistribution_func = redistribution_mode
 
-        self.global_growth = global_growth
-        self.global_prune = global_prune
+        self.global_growth = False
+        self.global_prune = False
 
         self.masks = {}
         self.modules = []
@@ -122,8 +122,8 @@ class Masking(object):
         self.start_name = None
 
         # global growth/prune state
-        self.threshold = threshold
-        self.growth_threshold = threshold
+        self.prune_threshold = 0.001
+        self.growth_threshold = 0.001
         self.growth_increment = 0.2
         self.increment = 0.2
         self.tolerance = 0.02
@@ -138,11 +138,14 @@ class Masking(object):
                 self.name_to_32bit[name] = tensor2
             self.half = True
 
-    def init(self, mode='enforce_density_per_layer', density=0.05):
+    def init(self, mode='constant', density=0.05):
         self.sparsity = density
         self.init_growth_prune_and_redist()
         self.init_optimizer()
-        if mode == 'enforce_density_per_layer':
+        if mode == 'constant':
+            # initializes each layer with a constant percentage of dense weights
+            # each layer will have weight.numel()*density weights.
+            # weight.numel()*density == weight.numel()*(1.0-sparsity)
             self.baseline_nonzero = 0
             for module in self.modules:
                 for name, weight in module.named_parameters():
@@ -151,6 +154,10 @@ class Masking(object):
                     self.baseline_nonzero += weight.numel()*density
             self.apply_mask()
         elif mode == 'resume':
+            # Initializes the mask according to the weights
+            # which are currently zero-valued. This is required
+            # if you want to resume a sparse model but did not
+            # save the mask.
             self.baseline_nonzero = 0
             for module in self.modules:
                 for name, weight in module.named_parameters():
@@ -161,8 +168,13 @@ class Masking(object):
                     self.masks[name][:] = (weight != 0.0).float().data.cuda()
                     self.baseline_nonzero += weight.numel()*density
             self.apply_mask()
-        elif mode == 'size_proportional':
+        elif mode == 'linear':
             # initialization used in sparse evolutionary training
+            # scales the number of non-zero weights linearly proportional
+            # to the product of all dimensions, that is input*output
+            # for fully connected layers, and h*w*in_c*out_c for conv
+            # layers.
+
             total_params = 0
             self.baseline_nonzero = 0
             for module in self.modules:
@@ -274,7 +286,7 @@ class Masking(object):
                 if self.verbose:
                     self.print_nonzero_counts()
 
-    def add_module(self, module, density, sparse_init='enforce_density_per_layer'):
+    def add_module(self, module, density, sparse_init='constant'):
         self.modules.append(module)
         for name, tensor in module.named_parameters():
             self.names.append(name)
@@ -473,18 +485,7 @@ class Masking(object):
         for module in self.modules:
             for name, weight in module.named_parameters():
                 if name not in self.masks: continue
-
-                if self.prune_mode == 'threshold':
-                    if self.is_at_start_of_pruning(name):
-                        expected_killed = sum(name2regrowth.values())
-                        #print(expected_killed, total_removed, self.threshold)
-                        if self.total_removed < (1.0-self.tolerance)*expected_killed:
-                            self.threshold *= 2.0
-                        elif self.total_removed > (1.0+self.tolerance) * expected_killed:
-                            self.threshold *= 0.5
-
-                    name2regrowth[name] = math.floor((self.total_removed/float(expected_killed))*name2regrowth[name])
-                elif self.prune_mode == 'global_magnitude':
+                if self.prune_mode == 'global_magnitude':
                     expected_removed = self.baseline_nonzero*self.name2prune_rate[name]
                     if expected_removed == 0.0:
                         name2regrowth[name] = 0.0
