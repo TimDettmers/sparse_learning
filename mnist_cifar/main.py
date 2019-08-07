@@ -200,6 +200,16 @@ def main():
             print_and_log('Redistribution mode: {0}'.format(args.redistribution))
             print_and_log('='*60)
 
+        # add custom prune/growth/redisribution here
+        if args.prune == 'magnitude_variance':
+            args.prune = magnitude_variance_pruning
+            args.optimizer == 'adam'
+            args.lr /= 100.0
+        if args.redistribution == 'variance':
+            args.redistribution = variance_redistribution
+            args.optimizer == 'adam'
+            args.lr /= 100.0
+
         optimizer = None
         if args.optimizer == 'sgd':
             optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
@@ -236,10 +246,6 @@ def main():
                                        dynamic_loss_scale = True,
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
-
-        # add custom prune/growth/redisribution here
-        if args.prune == 'magnitude_variance': args.prune = magnitude_variance_pruning
-        if args.redistribution == 'variance': args.redistribution = variance_redistribution
 
         mask = None
         if not args.dense:

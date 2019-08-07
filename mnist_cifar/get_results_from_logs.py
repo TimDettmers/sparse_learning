@@ -35,8 +35,11 @@ for folder in folders:
                 if 'Namespace' in line:
                     arg = line[19:-2]
                 if not line.startswith('Test evaluation'): continue
-                loss = float(line[31:37])
-                acc = float(line[61:-3])/100
+                try:
+                    loss = float(line[31:37])
+                    acc = float(line[61:-3])/100
+                except:
+                    print('Could not convert number: {0}'.format(line[31:37]))
 
                 losses.append(loss)
                 accs.append(acc)
