@@ -243,7 +243,7 @@ def main():
         if args.fp16:
             print('FP16')
             optimizer = FP16_Optimizer(optimizer,
-                                       static_loss_scale = args.batch_size)
+                                       static_loss_scale = 256)
                                        #dynamic_loss_scale = True,
                                        #dynamic_loss_args = {'init_scale': 2 ** 8})
             model = model.half()
