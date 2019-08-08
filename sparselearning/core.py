@@ -338,9 +338,9 @@ class Masking(object):
                         tensor.data = tensor.data*self.masks[name]
                     else:
                         tensor.data = tensor.data*self.masks[name].half()
-                        if name in self.name_to_32bit:
-                            tensor2 = self.name_to_32bit[name]
-                            tensor2.data = tensor2.data*self.masks[name]
+                        #if name in self.name_to_32bit:
+                        #    tensor2 = self.name_to_32bit[name]
+                        #    tensor2.data = tensor2.data*self.masks[name]
 
     def adjust_prune_rate(self):
         for module in self.modules:
