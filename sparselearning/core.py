@@ -338,9 +338,9 @@ class Masking(object):
                         tensor.data = tensor.data*self.masks[name]
                     else:
                         tensor.data = tensor.data*self.masks[name].half()
-                        #if name in self.name_to_32bit:
-                        #    tensor2 = self.name_to_32bit[name]
-                        #    tensor2.data = tensor2.data*self.masks[name]
+                        if name in self.name_to_32bit:
+                            tensor2 = self.name_to_32bit[name]
+                            tensor2.data = tensor2.data*self.masks[name]
 
     def adjust_prune_rate(self):
         for module in self.modules:
@@ -539,6 +539,9 @@ class Masking(object):
                     if w == 'momentum_buffer':
                         # momentum
                         self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
+                        if self.half:
+                            tensor2 = self.name_to_32bit[name]
+                            self.optimizer.optimizer.state[tensor2][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
                     elif w == 'square_avg' or \
                         w == 'exp_avg' or \
                         w == 'exp_avg_sq' or \
