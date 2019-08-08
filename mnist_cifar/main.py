@@ -71,7 +71,7 @@ def print_and_log(msg):
     print(msg)
     logger.info(msg)
 
-def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None):
+def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None, amp=None):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
@@ -83,7 +83,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         loss = F.nll_loss(output, target)
 
         if args.fp16:
-            optimizer.backward(loss)
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
         else:
             loss.backward()
 
@@ -164,9 +165,12 @@ def main():
     if args.fp16:
         try:
             from apex.fp16_utils import FP16_Optimizer
+            from apex import amp
         except:
             print('WARNING: apex not installed, ignoring --fp16 option')
             args.fp16 = False
+    else:
+        amp = None
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
@@ -242,11 +246,12 @@ def main():
 
         if args.fp16:
             print('FP16')
-            optimizer = FP16_Optimizer(optimizer,
-                                       static_loss_scale = 256)
-                                       #dynamic_loss_scale = True,
-                                       #dynamic_loss_args = {'init_scale': 2 ** 8})
-            model = model.half()
+            #optimizer = FP16_Optimizer(optimizer,
+            #                           static_loss_scale = 256)
+            #                           #dynamic_loss_scale = True,
+            #                           #dynamic_loss_args = {'init_scale': 2 ** 8})
+            #model = model.half()
+            model, optimizer = amp.initialize(model, optimizer, opt_level="O2", master_weights=False)
 
         mask = None
         if not args.dense:
@@ -258,7 +263,7 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
-            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask)
+            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, amp)
 
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader)

@@ -134,6 +134,9 @@ class Masking(object):
 
     def init_optimizer(self):
         if 'fp32_from_fp16' in self.optimizer.state_dict():
+            #print('aaa')
+            #print(self.optimizer.all_fp32_from_fp32_params)
+            print(self.optimizer.all_fp32_from_fp16_params)
             for (name, tensor), tensor2 in zip(self.modules[0].named_parameters(), self.optimizer.state_dict()['fp32_from_fp16'][0]):
                 self.name_to_32bit[name] = tensor2
             self.half = True
@@ -539,9 +542,6 @@ class Masking(object):
                     if w == 'momentum_buffer':
                         # momentum
                         self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
-                        if self.half:
-                            tensor2 = self.name_to_32bit[name]
-                            self.optimizer.optimizer.state[tensor2][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
                     elif w == 'square_avg' or \
                         w == 'exp_avg' or \
                         w == 'exp_avg_sq' or \
