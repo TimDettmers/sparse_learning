@@ -251,7 +251,7 @@ def main():
             #                           #dynamic_loss_scale = True,
             #                           #dynamic_loss_args = {'init_scale': 2 ** 8})
             #model = model.half()
-            model, optimizer = amp.initialize(model, optimizer, opt_level="O2", master_weights=False)
+            model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
 
         mask = None
         if not args.dense:
