@@ -48,12 +48,20 @@ def your_redistribution(masking, name, weight, mask):
 def variance_redistribution(masking, name, weight, mask):
     '''Return the mean variance of existing weights.
 
-    Higher variance means the layer does not have enough
-    capacity to model the inputs with the number of current weights.
-    If weights stabilize this means that some weights might
-    be useless/not needed.
+    Higher gradient variance means a layer does not have enough
+    capacity to model the inputs with the current number of weights.
+    Thus we want to add more weights if we have higher variance.
+    If variance of the gradient stabilizes this means
+    that some weights might be useless/not needed.
     '''
-    layer_importance = torch.var(weight.grad[mask.byte()]).mean().item()
+    # Adam calculates the running average of the sum of square for us
+    # This is similar to RMSProp. 
+    if 'exp_avg_sq' not in masking.optimizer.state[weight]:
+        print('Variance redistribution requires the adam optimizer to be run!')
+        raise Exception('Variance redistribution requires the adam optimizer to be run!')
+    iv_adam_sumsq = torch.sqrt(masking.optimizer.state[weight]['exp_avg_sq'])
+
+    layer_importance = iv_adam_sumsq[mask.byte()].mean().item()
     return layer_importance
 
 

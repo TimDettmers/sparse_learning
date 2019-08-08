@@ -159,6 +159,7 @@ def main():
 
     args = parser.parse_args()
     setup_logger(args)
+    print_and_log(args)
 
     if args.fp16:
         try:
@@ -202,13 +203,13 @@ def main():
 
         # add custom prune/growth/redisribution here
         if args.prune == 'magnitude_variance':
+            print('Using magnitude-variance pruning. Switching to Adam optimizer...')
             args.prune = magnitude_variance_pruning
             args.optimizer = 'adam'
-            args.lr /= 100.0
         if args.redistribution == 'variance':
+            print('Using variance redistribution. Switching to Adam optimizer...')
             args.redistribution = variance_redistribution
             args.optimizer = 'adam'
-            args.lr /= 100.0
 
         optimizer = None
         if args.optimizer == 'sgd':
