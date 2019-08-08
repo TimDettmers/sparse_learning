@@ -245,7 +245,7 @@ def main():
             optimizer = FP16_Optimizer(optimizer,
                                        static_loss_scale = None,
                                        dynamic_loss_scale = True,
-                                       dynamic_loss_args = {'init_scale': 2 ** 16})
+                                       dynamic_loss_args = {'init_scale': 2 ** 8})
             model = model.half()
 
         mask = None
