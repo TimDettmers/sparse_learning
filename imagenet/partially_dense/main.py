@@ -103,7 +103,7 @@ parser.add_argument('--n-prune-params', default=600, type=int,
 parser.add_argument('--threshold-prune',  action='store_true',
                     help='Prune based on a global threshold and not a fraction  (default: False)')
 
-parser.add_argument('--prune', dest='prune', action='store_true',
+parser.add_argument('--prune_mode', dest='prune_mode', action='store_true',
                     help='whether to use pruning or not  (default: False)')
 
 parser.add_argument('--validate-set',  action='store_true',
@@ -439,7 +439,7 @@ def main():
             
             
         
-    mask.init(mode='resume', density=args.density)
+    #mask.init(mode='resume', density=args.density)
     # get the number of model parameters
     model_size = base_model.get_model_size()
         
@@ -460,7 +460,8 @@ def main():
     val_prec5_l = []
     
 
-    prune_mode = args.prune
+    prune_mode = args.prune_mode
+    print('PRUNE MODE', prune_mode)
 
     start_pruning_after_epoch_n = args.start_pruning_after_epoch
     prune_every_epoch_n = args.prune_epoch_frequency
@@ -688,14 +689,14 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
               n_pruned_indices[i] = pruned_indices.size(0)
 
             if args.rewire_scaling:
-                sparse_tensor_nonzeros = np.array([x.mask.sum() for x in all_sparse_tensors])            
+                sparse_tensor_nonzeros = np.array([x.mask.sum().item() for x in all_sparse_tensors])            
 
                 pruned_tensor_fraction = n_pruned_indices / sparse_tensor_nonzeros
 
                 #one_percent_adjustment = ((pruned_tensor_fraction < pruned_tensor_fraction.mean()) * 2 - 1) / 100.0
                 #adjusted_pruned_tensor_fraction = pruned_tensor_fraction + one_percent_adjustment
 
-                adjusted_pruned_tensor_fraction = np.ones_like(pruned_tensor_fraction) * pruned_tensor_fraction.mean()
+                adjusted_pruned_tensor_fraction = np.ones_like(pruned_tensor_fraction, dtype=np.float32) * pruned_tensor_fraction.mean()
                 adjusted_pruned_tensor_fraction = np.clip(adjusted_pruned_tensor_fraction,0.0,1.0)
 
 
@@ -748,7 +749,7 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
                   'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
-            print('elapsed time ' + repr(time.time() - epoch_start_time))
+            #print('elapsed time ' + repr(time.time() - epoch_start_time))
                               
 
 

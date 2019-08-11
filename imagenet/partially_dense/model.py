@@ -123,8 +123,10 @@ class BasicBlock(nn.Module):
             
         self.droprate = dropRate
         self.equalInOut = (in_planes == out_planes)
-        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
-                               padding=0, bias=False) or None
+        #self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                               #padding=0, bias=False) or None
+        self.convShortcut = (not self.equalInOut) and DynamicConv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                               padding=0, bias=False, initial_sparsity=initial_sparsity, sub_kernel_granularity=sub_kernel_granularity, sparse=sparse) or None
     def forward(self, x):
         if not self.equalInOut:
             x = self.relu1(self.bn1(x))
@@ -216,24 +218,23 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
         adjusted_planes = planes#np.round(widen_factor * planes).astype('int32')
         
-        if vanilla_conv1:
-            self.conv1 = nn.Conv2d(inplanes, adjusted_planes, kernel_size=1, bias=False)
-            self.conv3 = nn.Conv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False)
+        #if vanilla_conv1:
+        #    self.conv1 = nn.Conv2d(inplanes, adjusted_planes, kernel_size=1, bias=False)
+        #    self.conv3 = nn.Conv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False)
 
                                
-        else:
-            self.conv1 = DynamicConv2d(inplanes, adjusted_planes, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
-                                       sub_kernel_granularity = sub_kernel_granularity,sparse = sparse )
-            self.conv3 = DynamicConv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
-                                       sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
+        self.conv1 = DynamicConv2d(inplanes, adjusted_planes, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
+                                   sub_kernel_granularity = sub_kernel_granularity,sparse = sparse )
+        self.conv3 = DynamicConv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
+                                   sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
             
 
 
-        if vanilla_conv3:
-            self.conv2 = nn.Conv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,padding=1, bias=False)
-        else:
-            self.conv2 = DynamicConv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,
-                                               padding=1, bias=False,initial_sparsity = initial_sparsity, sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
+        #if vanilla_conv3:
+        #    self.conv2 = nn.Conv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,padding=1, bias=False)
+        #else:
+        self.conv2 = DynamicConv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,
+                                           padding=1, bias=False,initial_sparsity = initial_sparsity, sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
             
             
         self.bn1 = nn.BatchNorm2d(adjusted_planes)
@@ -268,7 +269,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(DynamicNetworkBase):
 
-    def __init__(self, block, layers, num_classes=1000,widen_factor = 1,vanilla_downsample = True,vanilla_conv1 = True,vanilla_conv3 = True,
+    def __init__(self, block, layers, num_classes=1000,widen_factor = 1,vanilla_downsample = False,vanilla_conv1 = False,vanilla_conv3 = False,
                  initial_sparsity_conv = 0.5,initial_sparsity_fc = 0.95,sub_kernel_granularity = 4,sparse = True):
         self.inplanes = np.round(64 * widen_factor).astype('int32')
         super(ResNet, self).__init__()
@@ -281,8 +282,10 @@ class ResNet(DynamicNetworkBase):
         self.sub_kernel_granularity = sub_kernel_granularity
         self.sparse = sparse
         
-        self.conv1 = nn.Conv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
-                               bias=False)
+        #self.conv1 = nn.Conv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
+                               #bias=False)
+        self.conv1 = DynamicConv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
+                               bias=False, initial_sparsity=initial_sparsity_conv, sub_kernel_granularity=sub_kernel_granularity, sparse=sparse)
         self.bn1 = nn.BatchNorm2d(np.round(64 * widen_factor).astype('int32'))
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -291,11 +294,14 @@ class ResNet(DynamicNetworkBase):
         self.layer3 = self._make_layer(block, np.round(64 * widen_factor).astype('int32')*4, layers[2], stride=2)
         self.layer4 = self._make_layer(block, np.round(64 * widen_factor).astype('int32')*8, layers[3], stride=2)
         self.avgpool = nn.AvgPool2d(7, stride=1)
-        #self.fc = DynamicLinear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,initial_sparsity = self.initial_sparsity_fc,sparse = sparse)
-        self.fc = nn.Linear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,bias=True)
+        self.fc = DynamicLinear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,initial_sparsity = self.initial_sparsity_fc,sparse = sparse)
+        #self.fc = nn.Linear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,bias=True)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
+                print('ERROR!')
+                print('ERROR!')
+                print('ERROR!')
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
                 m.weight.data.normal_(0, math.sqrt(2. / n))
             elif isinstance(m, DynamicConv2d):
@@ -311,9 +317,9 @@ class ResNet(DynamicNetworkBase):
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False) if self.vanilla_downsample else \
+            downsample = nn.Sequential(\
+                #nn.Conv2d(self.inplanes, planes * block.expansion,
+                          #kernel_size=1, stride=stride, bias=False) if self.vanilla_downsample else \
                 DynamicConv2d(self.inplanes, planes * block.expansion,kernel_size=1,stride=stride, bias=False,
                                       initial_sparsity = self.initial_sparsity_conv,sub_kernel_granularity = self.sub_kernel_granularity,sparse = self.sparse),
                 nn.BatchNorm2d(planes * block.expansion),
