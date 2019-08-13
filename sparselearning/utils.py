@@ -24,7 +24,7 @@ class DatasetSplitter(torch.utils.data.Dataset):
         assert index < len(self),"index out of bounds in split_datset"
         return self.parent_dataset[index + self.split_start]
 
-def get_cifar10_dataloaders(args, validation_split=0.0):
+def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
     """Creates augmented train, validation, and test data loaders."""
 
     normalize = transforms.Normalize((0.4914, 0.4822, 0.4465),
@@ -50,6 +50,15 @@ def get_cifar10_dataloaders(args, validation_split=0.0):
     test_dataset = datasets.CIFAR10('_dataset', False, test_transform, download=False)
 
 
+    # we need at least two threads
+    max_threads = 2 if max_threads < 2 else max_threads
+    if max_threads >= 6:
+        val_threads = 2
+        train_threads = max_threads - val_threads
+    else:
+        val_threads = 1
+        train_threads = max_threads - 1
+
 
     valid_loader = None
     if validation_split > 0.0:
@@ -59,12 +68,12 @@ def get_cifar10_dataloaders(args, validation_split=0.0):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=8,
+            num_workers=train_threads,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
             args.test_batch_size,
-            num_workers=2,
+            num_workers=val_threads,
             pin_memory=True)
     else:
         train_loader = torch.utils.data.DataLoader(

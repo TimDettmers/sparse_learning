@@ -155,6 +155,7 @@ def main():
     parser.add_argument('--iters', type=int, default=1, help='How many times the model should be run after each other. Default=1')
     parser.add_argument('--save-features', action='store_true', help='Resumes a saved model and saves its feature data to disk for plotting.')
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
+    parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -180,7 +181,7 @@ def main():
         if args.data == 'mnist':
             train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
         else:
-            train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split)
+            train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split, max_threads=args.max_threads)
 
         if args.model not in models:
             print('You need to select an existing model via the --model argument. Available models include: ')
