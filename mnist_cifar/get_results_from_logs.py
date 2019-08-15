@@ -16,7 +16,7 @@ parser.add_argument('--all', action='store_true', help='Displays individual fina
 parser.add_argument('--folder-path', type=str, default=None, help='The folder to evaluate if running in folder mode.')
 parser.add_argument('--recursive', action='store_true', help='Apply folder-path mode to all sub-directories')
 parser.add_argument('--agg-config', action='store_true', help='Aggregate same configs within folders')
-parser.add_argument('--filter', type=str, help='Filters by argument.')
+parser.add_argument('--filter', type=str, default='', help='Filters by argument.')
 
 parser_cmd = argparse.ArgumentParser(description='PyTorch MNIST Example')
 parser_cmd.add_argument('--batch-size', type=int, default=100, metavar='N',help='input batch size for training (default: 100)')
@@ -91,6 +91,7 @@ for folder in folders:
             losses = []
             accs = []
         arg = None
+        skip = False
         with open(log_name) as f:
             for line in f:
                 if 'Namespace' in line:
@@ -98,11 +99,8 @@ for folder in folders:
                     if args.agg_config:
                         if len(args.filter) > 0:
                             filters = args.filter.split(' ')
-                            skip = False
-                            print(filters)
                             for f in filters:
                                 if not f in arg: skip = True
-                            if skip: continue
                         arg = ('--' + arg.replace(', ', ' --'))
                         arg = arg.replace('dense=False', 'dense')
                         arg = arg.replace('verbose=False', 'verbose')
@@ -127,6 +125,7 @@ for folder in folders:
                             hash2losses[hsval] = []
                             hash2config[hsval] = str(args_copy)
 
+                if skip: continue
                 if not line.startswith('Test evaluation'): continue
                 try:
                     loss = float(line[31:37])
@@ -145,26 +144,21 @@ for folder in folders:
         if not args.folder_path:
             calc_and_print_data(args, accs, losses, arg)
 
-    if args.agg_config:
-        for hsval in hash2accs:
-            accs = hash2accs[hsval]
-            losses = hash2losses[hsval]
-            arg = hash2config[hsval]
-
-            if len(accs) == 0:
-                print('Test set results logs in folder {0} empty!'.format(folder))
-                continue
-
-            print(hsval)
-            calc_and_print_data(args, accs, losses, arg)
-
-    elif args.folder_path:
+    if args.folder_path and not args.agg_config:
         if len(accs) == 0:
             print('Test set results logs in folder {0} empty!'.format(folder))
             continue
 
         calc_and_print_data(args, accs, losses, arg)
 
+if args.agg_config:
+    for hsval in hash2accs:
+        accs = hash2accs[hsval]
+        losses = hash2losses[hsval]
+        arg = hash2config[hsval]
 
+        if len(accs) == 0:
+            continue
 
+        calc_and_print_data(args, accs, losses, arg)
 
