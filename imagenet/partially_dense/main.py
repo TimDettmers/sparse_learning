@@ -400,8 +400,6 @@ def main():
         mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode='magnitude', growth_mode=args.growth, redistribution_mode=args.redistribution,
                        verbose=args.verbose, fp16=args.fp16)
         mask.add_module(model, density=args.density)
-        mask.remove_weight_partial_name('downsample')
-        mask.remove_weight('conv1.weight')
 
 
     if dataset == 'imagenet':
