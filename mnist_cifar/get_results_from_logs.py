@@ -42,6 +42,7 @@ parser_cmd.add_argument('--iters', type=int, default=1, help='How many times the
 parser_cmd.add_argument('--save-features', action='store', help='Resumes a saved model and saves its feature data to disk for plotting.')
 parser_cmd.add_argument('--bench', action='store', help='Enables the benchmarking of layers and estimates sparse speedups')
 parser_cmd.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
+parser_cmd.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
 sparselearning.core.add_sparse_args(parser_cmd)
 
 
@@ -108,6 +109,7 @@ for folder in folders:
                         arg = arg.replace('_', '-')
                         arg = arg.replace('decay-', 'decay_')
                         arg = arg.replace('valid-', 'valid_')
+                        arg = arg.replace('decay_schedule', 'decay-schedule')
 
                         arg_str = shlex.split(arg)
                         cmd_args = parser_cmd.parse_args(arg_str)
