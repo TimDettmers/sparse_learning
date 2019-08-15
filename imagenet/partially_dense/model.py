@@ -106,7 +106,7 @@ class mnist_mlp(DynamicNetworkBase):
 #########Definition of wide resnets
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, dropRate=0.0,widen_factor = 10,initial_sparsity = 0.5,sub_kernel_granularity = False,sparse = True):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.0,widen_factor = 10,initial_sparsity = 0.5,sub_kernel_granularity = False,sparse = True, sparse_momentum=False):
         super(BasicBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.relu1 = nn.ReLU(inplace=True)
@@ -219,21 +219,20 @@ class Bottleneck(nn.Module):
         adjusted_planes = planes#np.round(widen_factor * planes).astype('int32')
         
         #if vanilla_conv1:
-        #    self.conv1 = nn.Conv2d(inplanes, adjusted_planes, kernel_size=1, bias=False)
-        #    self.conv3 = nn.Conv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False)
-
-                               
-        self.conv1 = DynamicConv2d(inplanes, adjusted_planes, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
-                                   sub_kernel_granularity = sub_kernel_granularity,sparse = sparse )
-        self.conv3 = DynamicConv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
-                                   sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
+        if not sparse:
+            self.conv1 = nn.Conv2d(inplanes, adjusted_planes, kernel_size=1, bias=False)
+            self.conv3 = nn.Conv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False)
+        else:
+            self.conv1 = DynamicConv2d(inplanes, adjusted_planes, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
+            self.conv3 = DynamicConv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
+                                       sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
             
 
 
-        #if vanilla_conv3:
-        #    self.conv2 = nn.Conv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,padding=1, bias=False)
-        #else:
-        self.conv2 = DynamicConv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,
+        if not sparse:
+            self.conv2 = nn.Conv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,padding=1, bias=False)
+        else:
+            self.conv2 = DynamicConv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,
                                            padding=1, bias=False,initial_sparsity = initial_sparsity, sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
             
             
@@ -282,10 +281,12 @@ class ResNet(DynamicNetworkBase):
         self.sub_kernel_granularity = sub_kernel_granularity
         self.sparse = sparse
         
-        #self.conv1 = nn.Conv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
-                               #bias=False)
-        self.conv1 = DynamicConv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
-                               bias=False, initial_sparsity=initial_sparsity_conv, sub_kernel_granularity=sub_kernel_granularity, sparse=sparse)
+        if not sparse:
+            self.conv1 = nn.Conv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
+                                   bias=False)
+        else:
+            self.conv1 = DynamicConv2d(3, np.round(64 * widen_factor).astype('int32'), kernel_size=7, stride=2, padding=3,
+                                   bias=False, initial_sparsity=initial_sparsity_conv, sub_kernel_granularity=sub_kernel_granularity, sparse=sparse)
         self.bn1 = nn.BatchNorm2d(np.round(64 * widen_factor).astype('int32'))
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -294,17 +295,20 @@ class ResNet(DynamicNetworkBase):
         self.layer3 = self._make_layer(block, np.round(64 * widen_factor).astype('int32')*4, layers[2], stride=2)
         self.layer4 = self._make_layer(block, np.round(64 * widen_factor).astype('int32')*8, layers[3], stride=2)
         self.avgpool = nn.AvgPool2d(7, stride=1)
-        self.fc = DynamicLinear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,initial_sparsity = self.initial_sparsity_fc,sparse = sparse)
-        #self.fc = nn.Linear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,bias=True)
+        if not sparse:
+            self.fc = nn.Linear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,bias=True)
+        else:
+            self.fc = DynamicLinear(np.round(64 * widen_factor).astype('int32') * block.expansion * 8, num_classes,initial_sparsity = self.initial_sparsity_fc,sparse = sparse)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                print('ERROR!')
-                print('ERROR!')
-                print('ERROR!')
+                if sparse:
+                    raise Exception('Used sparse=True, but some layers are still dense.')
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
                 m.weight.data.normal_(0, math.sqrt(2. / n))
             elif isinstance(m, DynamicConv2d):
+                if not sparse:
+                    raise Exception('Used sparse=False, but some layers are still sparse.')
                 n = m.kernel_size * m.kernel_size * m.n_output_maps
                 if m.sparse:
                     m.d_tensor.s_tensor.data.normal_(0, math.sqrt(2. / n))
@@ -317,13 +321,13 @@ class ResNet(DynamicNetworkBase):
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(\
-                #nn.Conv2d(self.inplanes, planes * block.expansion,
-                          #kernel_size=1, stride=stride, bias=False) if self.vanilla_downsample else \
+            if not self.sparse:
+                conv = nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False)
+            else:
                 DynamicConv2d(self.inplanes, planes * block.expansion,kernel_size=1,stride=stride, bias=False,
-                                      initial_sparsity = self.initial_sparsity_conv,sub_kernel_granularity = self.sub_kernel_granularity,sparse = self.sparse),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
+                                      initial_sparsity = self.initial_sparsity_conv,sub_kernel_granularity = self.sub_kernel_granularity,sparse = self.sparse)
+            downsample = nn.Sequential(conv, nn.BatchNorm2d(planes * block.expansion))
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample,widen_factor = self.widen_factor,

@@ -197,6 +197,7 @@ parser.add_argument('--schedule-file', default='./schedule.yaml', type=str,
 parser.add_argument('--name', default='Parameter reallocation experiment', type=str,
                     help='name of experiment')
 parser.add_argument('--fp16', action='store_true')
+parser.add_argument('--sparse-momentum', action='store_true')
 sparselearning.core.add_sparse_args(parser)
 parser.set_defaults(augment=True)
 
@@ -363,7 +364,7 @@ def main():
             loaded_schedule = yaml.load(stream)
         except yaml.YAMLError as exc:
             print(exc)
-   
+
     if args.model == 'mnist_mlp':
         model = mnist_mlp(initial_sparsity = args.initial_sparsity_fc,sparse = not(args.tied),no_batch_norm = args.no_batch_norm)
     elif args.model == 'cifar10_WideResNet':
@@ -372,13 +373,12 @@ def main():
 
     elif args.model == 'imagenet_resnet50':
         model = imagenet_resnet50(initial_sparsity_conv = args.initial_sparsity_conv,initial_sparsity_fc = args.initial_sparsity_fc,
-                                   sub_kernel_granularity = args.sub_kernel_granularity,sparse = not(args.tied),widen_factor = args.widen_factor, vanilla_conv1=True, vanilla_conv3=True, vanilla_downsample=True)
-        
+                                  sub_kernel_granularity = args.sub_kernel_granularity,sparse = not(args.tied),widen_factor = args.widen_factor,
+                                  vanilla_conv1=True, vanilla_conv3=True, vanilla_downsample=True, sparse=not args.sparse_momentum)
     else:
         raise RuntimeError('unrecognized model name ' + repr(args.model))
 
     model = model.cuda()
-    
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum, nesterov = args.nesterov,
                                 weight_decay=args.weight_decay)
@@ -439,7 +439,6 @@ def main():
             
             
         
-    #mask.init(mode='resume', density=args.density)
     # get the number of model parameters
     model_size = base_model.get_model_size()
         
