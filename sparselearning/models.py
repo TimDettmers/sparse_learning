@@ -34,9 +34,25 @@ class SparseSpeedupBench(object):
     def get_density(self, x):
         return (x.data!=0.0).sum().item()/x.numel()
 
+    def print_weights(self, w, layer):
+        # w dims: out, in, k1, k2
+        #outers = []
+        #for outer in range(w.shape[0]):
+        #    inners = []
+        #    for inner in range(w.shape[1]):
+        #        n = np.prod(w.shape[2:])
+        #        density = (w[outer, inner, :, :] != 0.0).sum().item() / n
+        #        #print(density, w[outer, inner])
+        #        inners.append(density)
+        #    outers.append([np.mean(inners), np.std(inner)])
+        #print(outers)
+        #print(w.shape, (w!=0.0).sum().item()/w.numel())
+        pass
+
     def forward(self, layer, x, layer_id):
         if self.layer_0_idx is None: self.layer_0_idx = layer_id
         if layer_id == self.layer_0_idx: self.iter_idx += 1
+        self.print_weights(layer.weight.data, layer)
 
         # calc input sparsity
         sparse_channels_in = ((x.data != 0.0).sum([2, 3]) == 0.0).sum().item()

@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
+import numpy as np
 
 import sparselearning
 from sparselearning.core import Masking, CosineDecay, LinearDecay
