@@ -157,6 +157,7 @@ def main():
     parser.add_argument('--save-features', action='store_true', help='Resumes a saved model and saves its feature data to disk for plotting.')
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
+    parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -252,8 +253,10 @@ def main():
 
         mask = None
         if not args.dense:
-            decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
-            #decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
+            if args.decay_schedule == 'cosine':
+                decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
+            elif args.decay_schedule == 'linear':
+                decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
             mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
                            verbose=args.verbose, fp16=args.fp16)
             mask.add_module(model, density=args.density)
