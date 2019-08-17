@@ -23,7 +23,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-
 import argparse
 import os
 import shutil
@@ -42,6 +41,10 @@ import numpy as np
 import yaml
 import collections
 import sparselearning
+import logging
+import hashlib
+import copy
+import sys
 
 from torch.autograd import Variable
 
@@ -52,7 +55,36 @@ from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, 
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
 
+if not os.path.exists('./logs'): os.mkdir('./logs')
+logger = None
 
+def setup_logger(args):
+    global logger
+    if logger == None:
+        logger = logging.getLogger()
+    else:  # wish there was a logger.close()
+        for handler in logger.handlers[:]:  # make a copy of the list
+            logger.removeHandler(handler)
+
+    args_copy = copy.deepcopy(args)
+    # copy to get a clean hash
+    # use the same log file hash if iterations or verbose are different
+    # these flags do not change the results
+
+    log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args_copy).encode('utf-8')).hexdigest()[:8])
+
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(fmt='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
+
+    fh = logging.FileHandler(log_path)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+def print_and_log(msg):
+    global logger
+    print(msg)
+    sys.stdout.flush()
+    logger.info(msg)
 
 parser = argparse.ArgumentParser(description='PyTorch Dynamic network Training')
 parser.add_argument('--epochs', default=100, type=int,
@@ -228,12 +260,13 @@ def main():
     global args, best_prec1
 
     args = parser.parse_args()
+    setup_logger(args)
 
     if args.fp16:
         try:
             from apex.fp16_utils import FP16_Optimizer
         except:
-            print('WARNING: apex not installed, ignoring --fp16 option')
+            print_and_log('WARNING: apex not installed, ignoring --fp16 option')
             args.fp16 = False
 
     kwargs = {'num_workers': 1, 'pin_memory': True}
@@ -340,8 +373,8 @@ def main():
                 num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
             val_loader = torch.utils.data.DataLoader(
-                val_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-                num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+                val_dataset, batch_size=args.batch_size, shuffle=False,
+                num_workers=4, pin_memory=True)
 
             
         
@@ -358,12 +391,12 @@ def main():
     else:
        raise RuntimeError('Unknown dataset {}. Dataset is first segment of network name'.format(dataset))
 
-    print(args)
+    print_and_log(args)
     with open(args.schedule_file, 'r') as stream:
         try:
             loaded_schedule = yaml.load(stream)
         except yaml.YAMLError as exc:
-            print(exc)
+            print_and_log(exc)
 
     if args.model == 'mnist_mlp':
         model = mnist_mlp(initial_sparsity = args.initial_sparsity_fc,sparse = not(args.tied),no_batch_norm = args.no_batch_norm)
@@ -373,7 +406,7 @@ def main():
 
     elif args.model == 'imagenet_resnet50':
         model = imagenet_resnet50(initial_sparsity_conv = args.initial_sparsity_conv,initial_sparsity_fc = args.initial_sparsity_fc,
-                                  sub_kernel_granularity = args.sub_kernel_granularity,sparse = not(args.tied),widen_factor = args.widen_factor,
+                                  sub_kernel_granularity = args.sub_kernel_granularity,widen_factor = args.widen_factor,
                                   vanilla_conv1=True, vanilla_conv3=True, vanilla_downsample=True, sparse=not args.sparse_momentum)
     else:
         raise RuntimeError('unrecognized model name ' + repr(args.model))
@@ -385,25 +418,23 @@ def main():
 
 
     if args.fp16:
-        print('FP16')
+        print_and_log('FP16')
         optimizer = FP16_Optimizer(optimizer,
-                                   static_loss_scale = 256,
-                                   dynamic_loss_scale = False)#,
-                                   #dynamic_loss_args = {'init_scale': 2 ** 16})
+                                   static_loss_scale = None,
+                                   dynamic_loss_scale = True,
+                                   dynamic_loss_args = {'init_scale': 2 ** 16})
         model = model.half()
 
     mask = None
     if not args.dense:
         decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
-        for i in range(len(train_loader)*90):
-            decay.cosine_stepper.step()
         mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode='magnitude', growth_mode=args.growth, redistribution_mode=args.redistribution,
-                       verbose=args.verbose, fp16=args.fp16)
+                       verbose=True, fp16=args.fp16)
         mask.add_module(model, density=args.density)
 
 
     if dataset == 'imagenet':
-        print('setting up data parallel')
+        print_and_log('setting up data parallel')
         model = torch.nn.DataParallel(model).cuda()        
         base_model = model.module
     else:
@@ -412,28 +443,28 @@ def main():
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
+            print_and_log("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             #args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             if 'optimizer' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer'])
-                print('OPTIM')
+                print_and_log('OPTIM')
                 mask.optimizer = optimizer
-            print("=> loaded checkpoint '{}' "
+            print_and_log("=> loaded checkpoint '{}' "
                   .format(args.resume))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            print_and_log("=> no checkpoint found at '{}'".format(args.resume))
 
 
     if args.copy_mask_from:
           if os.path.isfile(args.copy_mask_from):
-                print("=> loading mask data '{}'".format(args.copy_mask_from))
+                print_and_log("=> loading mask data '{}'".format(args.copy_mask_from))
                 mask_data = torch.load(args.copy_mask_from)
                 filtered_mask_data = collections.OrderedDict([(x,y) for (x,y) in mask_data['state_dict'].items() if 'mask' in x])
                 model.load_state_dict(filtered_mask_data,strict = False)
           else:
-                print("=> no mask checkpoint found at '{}'".format(args.copy_mask_from))
+                print_and_log("=> no mask checkpoint found at '{}'".format(args.copy_mask_from))
             
             
         
@@ -458,7 +489,7 @@ def main():
     
 
     prune_mode = args.prune_mode
-    print('PRUNE MODE', prune_mode)
+    print_and_log('PRUNE MODE '+ str(prune_mode))
 
     start_pruning_after_epoch_n = args.start_pruning_after_epoch
     prune_every_epoch_n = args.prune_epoch_frequency
@@ -489,8 +520,8 @@ def main():
               return 1 - (1 - final_sparsity  + final_sparsity * cubic_pruning_multipliers[current_prune_iter+1]) / (1 - final_sparsity + final_sparsity * cubic_pruning_multipliers[current_prune_iter])
         
         nEpochs_to_prune = int(start_pruning_after_epoch_n + prune_every_epoch_n * (prune_iterations -1 ) ) + post_prune_epochs
-        print('prune fraction fc : {} , prune_fraction conv : {} '.format(prune_fraction_fc,prune_fraction_conv))
-        print('nepochs ' +repr(nEpochs_to_prune))
+        print_and_log('prune fraction fc : {} , prune_fraction conv : {} '.format(prune_fraction_fc,prune_fraction_conv))
+        print_and_log('nepochs ' +repr(nEpochs_to_prune))
     
         filename += '_target_' + repr(args.prune_target_sparsity_fc) + ',' + repr(args.prune_target_sparsity_conv)
         validate(test_loader, model, criterion, 1,'validate')
@@ -509,17 +540,17 @@ def main():
     DeepR_temperature_schedule = loaded_schedule['DeepR_temperature_schedule']
     threshold = 1.0e-3
     if args.resume:
-        print("Validating...")
+        print_and_log("Validating...")
         validate(test_loader, model, criterion, 1,'validate')
     for epoch in range(args.start_epoch, nEpochs_to_prune if prune_mode else args.epochs):
         adjust_learning_rate(optimizer, epoch,lr_schedule)
         rewire_period = get_schedule_val(rewire_schedule,epoch)
         DeepR_temperature = get_schedule_val(DeepR_temperature_schedule,epoch)
-        print('rewiring every {} iterations'.format(rewire_period))
+        print_and_log('rewiring every {} iterations'.format(rewire_period))
 
         t1 = time.time()
         current_iteration,threshold = train(mask, train_loader, model, criterion, optimizer,epoch,current_iteration,rewire_period,DeepR_temperature,threshold)
-        print('epoch time ' + repr(time.time() - t1))
+        print_and_log('epoch time ' + repr(time.time() - t1))
         
         if prune_mode and epoch >= start_pruning_after_epoch_n and (epoch - start_pruning_after_epoch_n) % prune_every_epoch_n == 0 and n_prunes_done < prune_iterations:
             if args.cubic_prune_schedule:
@@ -530,7 +561,7 @@ def main():
             else:
                   base_model.prune(prune_fraction_fc,prune_fraction_conv,prune_fraction_fc_special)                  
             n_prunes_done += 1
-            print(base_model.get_model_size())
+            print_and_log(base_model.get_model_size())
         
         if not(args.no_validate_train):
             prec1_train,prec5_train,loss_train = validate(train_loader, model, criterion, epoch,'train')
@@ -587,7 +618,7 @@ def main():
 
 
               
-    print('Best accuracy: ', best_prec1)
+    print_and_log('Best accuracy: ', best_prec1)
 
 
 def train(mask, train_loader, model, criterion, optimizer, epoch,current_iteration,rewire_period,DeepR_temperature,threshold):
@@ -674,7 +705,7 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
                     pruned_indices = st.prune_sign_change(not(args.big_new_weights),enable_print = enable_print)
                     st.grow_random(None,pruned_indices,enable_print = enable_print)
         elif args.rewire and (i + current_iteration != 0) and (i + current_iteration) % rewire_period == 0 and epoch < args.stop_rewire_epoch:
-            print('rewiring at iteration ' + repr(i+current_iteration))
+            print_and_log('rewiring at iteration ' + repr(i+current_iteration))
             n_pruned_indices = np.zeros(len(all_sparse_tensors))
             all_pruned_indices = []            
             for i,st in enumerate(all_sparse_tensors):
@@ -718,9 +749,9 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
                       for i,st in enumerate(all_sparse_tensors):
                             n_grown += st.grow_random(None,all_pruned_indices[i],n_to_add = grow_backs_count[i])
 
-                print('n_grown : {} , n_pruned : {}'.format(n_grown,n_pruned_indices.sum()))
+                print_and_log('n_grown : {} , n_pruned : {}'.format(n_grown,n_pruned_indices.sum()))
                 if n_grown != n_pruned_indices.sum():
-                      print('*********** discrepency between pruned and grown')
+                      print_and_log('*********** discrepency between pruned and grown')
             
             else:
                 for i,st in enumerate(all_sparse_tensors):
@@ -731,14 +762,14 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
                     threshold /= 2.0
                 elif n_pruned_indices.sum() < 0.9 * args.n_prune_params:
                     threshold *= 2.0
-                print('threshold is ' + repr(threshold))
+                print_and_log('threshold is ' + repr(threshold))
         
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            print_and_log('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -746,7 +777,7 @@ def train(mask, train_loader, model, criterion, optimizer, epoch,current_iterati
                   'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
-            #print('elapsed time ' + repr(time.time() - epoch_start_time))
+            print('elapsed time ' + repr(time.time() - epoch_start_time))
                               
 
 
@@ -789,7 +820,7 @@ def validate(val_loader, model, criterion, epoch,pre_text):
 
         
         if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
+            print_and_log('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
@@ -797,7 +828,7 @@ def validate(val_loader, model, criterion, epoch,pre_text):
                        i, len(val_loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
 
-    print(pre_text + ' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+    print_and_log(pre_text + ' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
 
     return top1.avg,top5.avg,losses.avg
@@ -841,7 +872,7 @@ def adjust_learning_rate(optimizer, epoch,schedule):
     #lr = args.lr * ((0.2 ** int(epoch >= 30)) * (0.2 ** int(epoch >= 60))* (0.2 ** int(epoch >= 90)))
     lr = get_schedule_val(schedule,epoch)
 
-    print('setting learning rate to ' + repr(lr))
+    print_and_log('setting learning rate to ' + repr(lr))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 

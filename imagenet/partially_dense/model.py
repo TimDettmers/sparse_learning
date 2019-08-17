@@ -224,11 +224,9 @@ class Bottleneck(nn.Module):
             self.conv3 = nn.Conv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False)
         else:
             self.conv1 = DynamicConv2d(inplanes, adjusted_planes, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
+                                       sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
             self.conv3 = DynamicConv2d(adjusted_planes, planes * 4, kernel_size=1, bias=False , initial_sparsity = initial_sparsity,
                                        sub_kernel_granularity = sub_kernel_granularity,sparse = sparse)
-            
-
-
         if not sparse:
             self.conv2 = nn.Conv2d(adjusted_planes, adjusted_planes, kernel_size=3, stride=stride,padding=1, bias=False)
         else:
