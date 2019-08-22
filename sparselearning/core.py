@@ -319,7 +319,7 @@ class Masking(object):
         for name in list(self.masks.keys()):
             if partial_name in name:
                 if self.verbose:
-                    print('Removing {0} of size {1}...'.format(name, self.masks[name].shape))
+                    print('Removing {0} of size {1} with {2} parameters...'.format(name, self.masks[name].shape, np.prod(self.masks[name].shape)))
                 removed.add(name)
                 self.masks.pop(name)
 
