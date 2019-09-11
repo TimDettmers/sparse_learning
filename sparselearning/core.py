@@ -269,7 +269,6 @@ class Masking(object):
         self.truncate_weights()
         if self.verbose:
             self.print_nonzero_counts()
-        #self.reset_momentum()
 
     def step(self):
         self.optimizer.step()
@@ -282,7 +281,6 @@ class Masking(object):
         if self.prune_every_k_steps is not None:
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights()
-                self.reset_momentum()
                 if self.verbose:
                     self.print_nonzero_counts()
 
@@ -531,26 +529,3 @@ class Masking(object):
                     print(name, num_nonzeros)
 
         print('Prune rate: {0}\n'.format(self.prune_rate))
-
-    def reset_momentum(self):
-        """
-        Taken from: https://github.com/AlliedToasters/synapses/blob/master/synapses/SET_layer.py
-        Resets buffers from memory according to passed indices.
-        When connections are reset, parameters should be treated
-        as freshly initialized.
-        """
-        for module in self.modules:
-            for name, tensor in module.named_parameters():
-                if name not in self.masks: continue
-                mask = self.masks[name]
-                weights = list(self.optimizer.state[tensor])
-                for w in weights:
-                    if w == 'momentum_buffer':
-                        # momentum
-                        self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
-                    elif w == 'square_avg' or \
-                        w == 'exp_avg' or \
-                        w == 'exp_avg_sq' or \
-                        w == 'exp_inf':
-                        # Adam
-                        self.optimizer.state[tensor][w][mask==0] = torch.mean(self.optimizer.state[tensor][w][mask.byte()])
