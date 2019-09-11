@@ -61,7 +61,7 @@ def variance_redistribution(masking, name, weight, mask):
         raise Exception('Variance redistribution requires the adam optimizer to be run!')
     iv_adam_sumsq = torch.sqrt(masking.optimizer.state[weight]['exp_avg_sq'])
 
-    layer_importance = iv_adam_sumsq[mask.byte()].mean().item()
+    layer_importance = iv_adam_sumsq[mask.bool()].mean().item()
     return layer_importance
 
 
@@ -109,8 +109,8 @@ def magnitude_variance_pruning(masking, mask, weight, name):
     k = math.ceil(num_zeros + num_remove)
     if num_remove == 0.0: return weight.data != 0.0
 
-    max_var = iv_adam_sumsq[mask.byte()].max().item()
-    max_magnitude = torch.abs(weight.data[mask.byte()]).max().item()
+    max_var = iv_adam_sumsq[mask.bool()].max().item()
+    max_magnitude = torch.abs(weight.data[mask.bool()]).max().item()
     product = ((iv_adam_sumsq/max_var)*torch.abs(weight.data)/max_magnitude)*mask
     product[mask==0] = 0.0
 

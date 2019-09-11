@@ -394,7 +394,7 @@ class Masking(object):
             for module in self.modules:
                 for name, weight in module.named_parameters():
                     if name not in self.masks: continue
-                    new_mask = self.masks[name].data.byte()
+                    new_mask = self.masks[name].data.bool()
 
                     # growth
                     new_mask = self.growth_func(self, name, new_mask, math.floor(name2regrowth[name]), weight)

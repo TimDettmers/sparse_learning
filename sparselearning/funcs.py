@@ -33,11 +33,11 @@ def momentum_redistribution(masking, name, weight, mask):
     step in this sparse learning library.
     """
     grad = masking.get_momentum_for_weight(weight)
-    mean_magnitude = torch.abs(grad[mask.byte()]).mean().item()
+    mean_magnitude = torch.abs(grad[mask.bool()]).mean().item()
     return mean_magnitude
 
 def magnitude_redistribution(masking, name, weight, mask):
-    mean_magnitude = torch.abs(weight)[mask.byte()].mean().item()
+    mean_magnitude = torch.abs(weight)[mask.bool()].mean().item()
     return mean_magnitude
 
 def nonzero_redistribution(masking, name, weight, mask):
@@ -172,7 +172,7 @@ def random_growth(masking, name, new_mask, total_regrowth, weight):
     if n == 0: return new_mask
     expeced_growth_probability = (total_regrowth/n)
     new_weights = torch.rand(new_mask.shape).cuda() < expeced_growth_probability
-    return new_mask.byte() | new_weights
+    return new_mask.bool() | new_weights
 
 def momentum_growth(masking, name, new_mask, total_regrowth, weight):
     """Grows weights in places where the momentum is largest.
@@ -314,7 +314,7 @@ def global_momentum_growth(masking, total_regrowth):
             new_mask = masking.masks[name]
             grad = masking.get_momentum_for_weight(weight)
             grad = grad*(new_mask==0).float()
-            masking.masks[name][:] = (new_mask.byte() | (torch.abs(grad.data) > masking.growth_threshold)).float()
+            masking.masks[name][:] = (new_mask.bool() | (torch.abs(grad.data) > masking.growth_threshold)).float()
             total_new_nonzeros += new_mask.sum().item()
     return total_new_nonzeros
 
