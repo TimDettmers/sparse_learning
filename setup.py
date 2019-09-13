@@ -10,7 +10,7 @@ def read(fname):
 
 setup(
     name = "sparselearning",
-    version = "0.0.1",
+    version = "1.0.0",
     author = "Tim Dettmers",
     author_email = "dettmers@cs.washington.edu",
     description = ("Sparse learning library including sparse momentum algorithm."),

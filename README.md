@@ -2,6 +2,10 @@
 
 This repo contains a sparse learning library which allows you to wrap any PyTorch neural network with a sparse mask to emulate the training of sparse neural networks. It also contains the code to replicate our work [Sparse Networks from Scratch: Faster Training without Losing Performance](https://arxiv.org/abs/1907.04840).
 
+## Requirements
+
+The library requires PyTorch v1.2. You can download it via anaconda or pip, see [PyTorch/get-started](https://pytorch.org/get-started/locally/) for further information. For CUDA version < 9.2 you need to either compile from source, or install a new CUDA version along with a compatible video driver.
+
 ## Installation
 
 1. Install [PyTorch](https://pytorch.org/get-started/locally/).
@@ -56,9 +60,9 @@ Beyond standard parameters like batch-size and learning rate which usage can be 
 
 ### Running an ImageNet Model
 
-To run ImageNet you need to install [Apex](https://github.com/NVIDIA/apex). For me it currently does not work to install apex from pip, but installing it from the repo works just fine.
+To run ImageNet with 16-bit you need to install [Apex](https://github.com/NVIDIA/apex). For me it currently does not work to install apex from pip, but installing it from the repo works just fine.
 
-The ImageNet code for sparse momentum can be found in the sub-folder `imagenet` which contains an adjusted version of [NVIDIA Deep Learning Examples: RN50v1.5](https://github.com/NVIDIA/DeepLearningExamples/tree/master/PyTorch/Classification/RN50v1.5). For now, please follow the instructions of this repo (I will update more specific instructions later). You can use the adjusted `RN50_FP32_4GPU.sh` script in the `imagenet/example` folder to run an ImageNet example once you setup everything as described in the original repo.
+The ImageNet code for sparse momentum can be found in the sub-folder `imagenet` which contains two different ResNet-50 ImageNet models: A baseline that is used by Mostafa & Wang (2019) which reaches 74.9% accuravy with 100% weights and a tuned ResNet-50 version which is identical to the baseline but uses a warmup learning rate and label smoothing and reaches 77.0% accuracy with 100% weights. The tuned version builds on [NVIDIA Deep Learning Examples: RN50v1.5](https://github.com/NVIDIA/DeepLearningExamples/tree/master/PyTorch/Classification/RN50v1.5) while the baseline builds on [Intel/dynamic-reparameterization](https://github.com/IntelAI/dynamic-reparameterization). 
 
 ### Running Your Own Model
 
@@ -69,6 +73,6 @@ With the sparse learning library it is easy to run sparse momentum on your own m
 
 ## Extending the Library
 
-Some changes to the library are still pending which will enable the easy extension with your own sparse learning algorithm. Stay tuned.
+It is easy to extend the library with your own functions for growth, redistribution and pruning. See [The Extension Tutorial](https://github.com/TimDettmers/sparse_learning/blob/master/How_to_add_your_own_algorithms.md) for more information about how you can add your own functions.
 
 [template]: https://timdettmers.com/wp-content/uploads/2019/07/code.png "Generic example usage of sparse learning library."
