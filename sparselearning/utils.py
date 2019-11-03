@@ -115,7 +115,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
             train_dataset,
             args.batch_size,
             num_workers=8,
-            pin_memory=True, shuffle=True)
+            pin_memory=True, shuffle=False)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
             args.test_batch_size,
@@ -126,7 +126,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
             full_dataset,
             args.batch_size,
             num_workers=8,
-            pin_memory=True, shuffle=True)
+            pin_memory=True, shuffle=False)
 
     print('Train loader length', len(train_loader))
 
@@ -137,7 +137,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         num_workers=1,
         pin_memory=True)
 
-    return train_loader, valid_loader, test_loader
+    return train_loader, valid_loader, test_loader, full_dataset
 
 
 def plot_class_feature_histograms(args, model, device, test_loader, optimizer):

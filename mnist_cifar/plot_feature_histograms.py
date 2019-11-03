@@ -7,7 +7,7 @@ from statsmodels.formula.api import ols
 from statsmodels.stats.anova import anova_lm
 
 import scipy.stats as stats
-basepath = './results/'
+basepath = '/home/tim/data/git/sparse_learning/results/'
 
 names = []
 names.append(['AlexNet', '{0}alexnet_dense_feat_data_layer_0.npy'.format(basepath), '{0}alexnet_sparse_feat_data_layer_0.npy'.format(basepath)])

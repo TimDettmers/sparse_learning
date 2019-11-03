@@ -7,6 +7,8 @@ import argparse
 import logging
 import hashlib
 import copy
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
 
 import torch
 import torch.nn.functional as F
@@ -20,6 +22,11 @@ from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, 
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
 from extensions import magnitude_variance_pruning, variance_redistribution
+
+from transformers import RobertaModel
+
+
+control_task_mapping = {}
 
 cudnn.benchmark = True
 cudnn.deterministic = True
@@ -41,6 +48,73 @@ models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
 models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
 models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
 
+
+class RobertaCV(torch.nn.Module):
+    def __init__(self):
+        super(RobertaCV,self).__init__()
+        self.roberta = RobertaModel.from_pretrained('roberta-base')
+        self.proj = torch.nn.Linear(28*28, 768, bias=False)
+        self.output_proj = torch.nn.Linear(768, 10)
+        #self.norm = torch.nn.LayerNorm(768)
+        self.linear = None
+        self.mapping = None
+
+    def create_control_task_mapping(self):
+        control_task_mapping = {}
+        for i in range(10):
+            rdm = torch.rand(1)
+            if rdm < 0.33:
+                control_task_mapping[i] = 'self'
+            elif rdm > 0.66:
+                control_task_mapping[i] = 'first'
+            else:
+                control_task_mapping[i] = 'last'
+        self.mapping = control_task_mapping
+        print(self.mapping)
+
+    def map_labels_to_control(self, y):
+        for i in range(10):
+            action = self.mapping[i]
+            if action == 'self':
+                pass
+            elif action == 'first':
+                idx = torch.where(y==i)[0]
+                idx -= 15
+                idx[idx < 0] = 0
+                y[y==i] = y[idx]
+            elif action == 'last':
+                idx = torch.where(y==i)[0]
+                idx += 15
+                idx[idx > y.numel()-1] = y.numel()-1
+                y[y==i] = y[idx]
+        return y
+
+    def forward(self, x, y):
+        x = x.view(-1, 28*28)
+        if self.linear is not None:
+            x = np.float32(self.linear.predict(x.data.cpu().numpy()))
+            x = torch.from_numpy(x).cuda()
+        else:
+            #x = self.norm(self.proj(x))
+            x = self.proj(x)
+
+        x = self.roberta.forward(x, X=x)
+        x = x.view(-1, 768)
+        #print(x.data[0, :20])
+
+        x = self.output_proj(x)
+        x = F.log_softmax(x, dim=1)
+        return x
+
+class LinearModel(torch.nn.Module):
+    def __init__(self):
+        super(LinearModel, self).__init__()
+        self.linear = torch.nn.Linear(28*28, 10)
+
+    def forward(self, x, y):
+        return F.log_softmax(self.linear(x.view(-1, 28*28)))
+
+
 def setup_logger(args):
     global logger
     if logger == None:
@@ -61,25 +135,28 @@ def setup_logger(args):
     log_path = './logs/{0}_{1}_{2}.log'.format(args.model, args.density, hashlib.md5(str(args_copy).encode('utf-8')).hexdigest()[:8])
 
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(fmt='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
+    #formatter = logging.Formatter(fmt='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
 
     fh = logging.FileHandler(log_path)
-    fh.setFormatter(formatter)
+    #fh.setFormatter(formatter)
     logger.addHandler(fh)
 
 def print_and_log(msg):
     global logger
     print(msg)
-    logger.info(msg)
+    #logger.info(msg)
 
 def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None):
     model.train()
+    model.roberta.eval()
     for batch_idx, (data, target) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
         data, target = data.to(device), target.to(device)
         if args.fp16: data = data.half()
         optimizer.zero_grad()
-        output = model(data)
+        output = model(data, target)
+
+        target = model.map_labels_to_control(target)
 
         loss = F.nll_loss(output, target)
 
@@ -106,7 +183,7 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
             data, target = data.to(device), target.to(device)
             if args.fp16: data = data.half()
             model.t = target
-            output = model(data)
+            output = model(data, target)
             test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -181,7 +258,7 @@ def main():
         print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
         if args.data == 'mnist':
-            train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
+            train_loader, valid_loader, test_loader, data = get_mnist_dataloaders(args, validation_split=args.valid_split)
         else:
             train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split, max_threads=args.max_threads)
 
@@ -192,17 +269,51 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
-            model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
-            print_and_log(model)
-            print_and_log('='*60)
-            print_and_log(args.model)
-            print_and_log('='*60)
 
-            print_and_log('='*60)
-            print_and_log('Prune mode: {0}'.format(args.prune))
-            print_and_log('Growth mode: {0}'.format(args.growth))
-            print_and_log('Redistribution mode: {0}'.format(args.redistribution))
-            print_and_log('='*60)
+        model = RobertaCV()
+        model.create_control_task_mapping()
+        #model = LinearModel()
+        for name, p in model.roberta.named_parameters():
+            if 'LayerNorm' in name:
+                #p.requires_grad = False
+                pass
+            else:
+                p.requires_grad = False
+        model.proj.weight.requires_grad = False
+        model.to(device)
+
+        #X = model.roberta.embeddings.word_embeddings.weight.data.cpu().numpy()
+
+        #clf = KMeans(10, n_jobs=16, n_init=10, tol=1.0e-5, max_iter=300)
+        #print(train_loader.dataset)
+        #X2, y2 = data.train_data.numpy(), data.train_labels.numpy()
+        #X2 = X2.reshape(-1, 28*28).copy()
+        #X2 = X2/255.
+        #X2 -= 0.1307
+        #X2 /= 0.3081
+
+        #clf2 = LinearRegression()
+
+        #print(X.shape)
+        #print('fitting...')
+        #clf.fit(X)
+        #print(clf.cluster_centers_.shape)
+        #targets = clf.cluster_centers_[y2]
+        #print(targets.shape, X2.shape)
+        #print('fitting regression...')
+        #clf2.fit(X2, targets)
+        #print(clf2.score(X2, targets))
+        #model.linear = clf2
+
+
+        for p in model.parameters():
+            if p.requires_grad:
+                print(p.shape, p.requires_grad)
+            #else:
+            #    if len(p.shape) == 1:
+            #        torch.nn.init.constant_(p, 0.0)
+            #    else:
+            #        torch.nn.init.xavier_uniform_(p, gain=1)
 
         # add custom prune/growth/redisribution here
         if args.prune == 'magnitude_variance':
@@ -216,14 +327,16 @@ def main():
 
         optimizer = None
         if args.optimizer == 'sgd':
-            optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+            optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
         elif args.optimizer == 'adam':
-            optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
+            #optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),lr=args.lr,weight_decay=args.l2)
         else:
             print('Unknown optimizer: {0}'.format(args.optimizer))
             raise Exception('Unknown optimizer.')
 
         lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
+
 
         if args.resume:
             if os.path.isfile(args.resume):
