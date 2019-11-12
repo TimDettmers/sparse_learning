@@ -176,6 +176,7 @@ def main():
 
     print_and_log('\n\n')
     print_and_log('='*80)
+    print_and_log('Running with seed: {0}'.format(args.seed))
     torch.manual_seed(args.seed)
     for i in range(args.iters):
         print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))

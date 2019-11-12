@@ -230,6 +230,7 @@ parser.add_argument('--name', default='Parameter reallocation experiment', type=
                     help='name of experiment')
 parser.add_argument('--fp16', action='store_true')
 parser.add_argument('--sparse-momentum', action='store_true')
+parser.add_argument('--seed', type=int, default=0, help='Seed for random generator')
 sparselearning.core.add_sparse_args(parser)
 parser.set_defaults(augment=True)
 
@@ -260,6 +261,8 @@ def main():
     global args, best_prec1
 
     args = parser.parse_args()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     setup_logger(args)
 
     if args.fp16:
