@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay, LinearDecay
+from sparselearning.core import Masking, CosineDecay, LinearDecay, CorrelationTracker
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -72,16 +72,20 @@ def print_and_log(msg):
     print(msg)
     logger.info(msg)
 
-def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None):
+def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None, tracker=None):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
         data, target = data.to(device), target.to(device)
+
+        if tracker is not None: tracker.set_label(target)
+
         if args.fp16: data = data.half()
         optimizer.zero_grad()
         output = model(data)
 
         loss = F.nll_loss(output, target)
+
 
         if args.fp16:
             optimizer.backward(loss)
@@ -95,6 +99,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
             print_and_log('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
+    if tracker is not None:
+        tracker.generate_heatmap('/home/tim/data/plots/corr')
 
 def evaluate(args, model, device, test_loader, is_test_set=False):
     model.eval()
@@ -252,6 +258,11 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
+        tracker = CorrelationTracker(num_labels=10)
+        tracker.wrap_model(model)
+        #tracker = None
+
+
         mask = None
         if not args.dense:
             if args.decay_schedule == 'cosine':
@@ -264,7 +275,7 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
-            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask)
+            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, tracker)
 
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader)

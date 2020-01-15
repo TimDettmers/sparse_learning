@@ -11,8 +11,10 @@ import math
 import os
 import shutil
 import time
+import seaborn as sb
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
+
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
@@ -22,6 +24,102 @@ def add_sparse_args(parser):
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
     parser.add_argument('--dense', action='store_true', help='Enable dense mode. Default: False.')
     parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
+
+class CorrelationTracker(object):
+    def __init__(self, num_labels, momentum=0.9):
+        super(CorrelationTracker, self).__init__()
+        self.label = None
+        self.num_labels = num_labels
+        self.name2corr = {}
+        self.momentum = momentum
+        self.label_vector = None
+        self.name2accs = {}
+
+    def wrap_model(self, model):
+        for n, m in model.named_modules():
+            if isinstance(m, torch.nn.Conv2d):
+                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward(name, module, inputs, output))
+
+    def set_label(self, label):
+        # if mini-batch size is different or label not set
+        self.label_vector = label
+        #counts = torch.histc(label, bins=10)
+        #print(counts)
+        if self.label is None or self.label.shape[0] != label.shape[0]:
+            self.label = torch.zeros(label.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)
+            self.label = self.label.to(device=label.device)
+
+        self.label.zero_()
+        self.label.scatter_(1, label.view(-1, 1), 1)
+
+        self.label -= self.label.mean(0)
+        std = self.label.std(0)
+        std[std==0.0] = 1.0
+        self.label /= std
+
+    def generate_heatmap(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        print('Generating heatmaps...')
+        for name, corr in self.name2corr.items():
+            data = corr.cpu().numpy()
+            sb.heatmap(data)
+            #plt.imshow(data, cmap='hot', interpolation='nearest')
+            #heatmap = plt.pcolor(data)
+            #plt.colorbar()
+            plt.savefig(os.path.join(path, '{0}.png'.format(name)))
+            plt.clf()
+            #print(corr.sum().item(),name, corr.max().item(), corr.min().item())
+
+        for name, acc in self.name2accs.items():
+            print(name, np.median(acc), np.mean(acc), acc[-5:])
+
+        self.name2accs = {}
+
+    def predict(self, name, activation, topk=1):
+        corr = self.name2corr[name].clone()
+        #corr[torch.abs(corr) < 0.2] = 0.0
+        preds = torch.mm(activation, corr)
+        val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
+        correct = 0
+        for i in range(topk):
+            correct += (self.label_vector == ids[:, i]).sum().item()
+
+        acc = correct/self.label_vector.numel()
+        if name not in self.name2accs: self.name2accs[name] = []
+        self.name2accs[name].append(acc)
+
+        # cutoff based on class probability distribution
+        #return F.normalize(preds)
+
+    def forward(self, name, module, inputs, activation):
+        x = activation.data.clone()
+        x = x.sum([2,3])
+        x -= x.mean(0)
+        std = x.std(0)
+        std[std==0.0] = 1.0
+        x /= std
+        corr = torch.mm(x.T, self.label)/x.shape[0]
+        if name not in self.name2corr:
+            self.name2corr[name] = corr
+        else:
+            m = self.name2corr[name]
+            self.name2corr[name] = m*0.9 + (0.1*corr)
+
+        self.predict(name, x, topk=2)
+        # cutoff based on class probability distribution
+        #normed_preds = self.predict(name, x, topk=2)
+        #normed_corr = F.normalize(self.name2corr[name].clone())
+        #feats = torch.mm(normed_preds, normed_corr.T)
+        #n = x.shape[1]
+        #top_feats = int(n*fraction)
+        #feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        #feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        #activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+
+
 
 class CosineDecay(object):
     """Decays a pruning rate according to a cosine schedule
