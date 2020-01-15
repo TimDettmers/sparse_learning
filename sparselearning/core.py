@@ -81,6 +81,8 @@ class CorrelationTracker(object):
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
         preds = torch.mm(activation, corr)
+
+
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
         for i in range(topk):
@@ -90,34 +92,64 @@ class CorrelationTracker(object):
         if name not in self.name2accs: self.name2accs[name] = []
         self.name2accs[name].append(acc)
 
+        return preds
         # cutoff based on class probability distribution
         #return F.normalize(preds)
 
     def forward(self, name, module, inputs, activation):
+        #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)
         x = activation.data.clone()
         x = x.sum([2,3])
         x -= x.mean(0)
         std = x.std(0)
-        std[std==0.0] = 1.0
+        std[std==0] = 1.0
         x /= std
         corr = torch.mm(x.T, self.label)/x.shape[0]
         if name not in self.name2corr:
             self.name2corr[name] = corr
         else:
             m = self.name2corr[name]
-            self.name2corr[name] = m*0.9 + (0.1*corr)
+            self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
 
-        self.predict(name, x, topk=2)
+        preds = self.predict(name, x, topk=3)
+        corr = self.name2corr[name]
+        #self.all_class_correlation_pruning(preds, corr, activation, 0.3)
+        self.max_class_correlation_pruning(preds, corr, activation, 0.3, 3)
+
+    def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3):
+        top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
+
+        labels = torch.zeros(top_preds.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)
+        labels = labels.to(device=top_preds.device)
+
+        labels.scatter_(1, top_preds, 1)
+
+        feats = torch.mm(labels*preds, corr.T)
+        n = activation.shape[1]
+        top_feats = math.ceil(n*fraction)
+        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        #feats = (feats > feat_val[:, -1].view(-1, 1)).float().view(feats.shape[0], feats.shape[1], 1, 1)
+        #print((feats==0.0).sum().item(), (feats!=0.0).sum().item(), 'feats')
+        activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        #activation= activation*feats
+
+
+
+    def all_class_correlation_pruning(self, preds, corr, activation, fraction):
         # cutoff based on class probability distribution
-        #normed_preds = self.predict(name, x, topk=2)
-        #normed_corr = F.normalize(self.name2corr[name].clone())
+        #normed_preds = F.normalize(preds)
+        #normed_corr = F.normalize(corr.clone())
         #feats = torch.mm(normed_preds, normed_corr.T)
-        #n = x.shape[1]
-        #top_feats = int(n*fraction)
-        #feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        #feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        #feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        #activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        #feats = torch.mm(normed_preds, corr.T)
+        feats = torch.mm(preds, corr.T)
+        n = activation.shape[1]
+        top_feats = math.ceil(n*fraction)
+        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
 
 
 
