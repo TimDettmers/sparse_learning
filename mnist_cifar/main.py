@@ -100,7 +100,9 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
     if tracker is not None:
-        tracker.generate_heatmap('/home/tim/data/plots/corr')
+        if args.cluster:
+            tracker.generate_clusters()
+        #tracker.generate_heatmap('/home/tim/data/plots/corr')
 
 def evaluate(args, model, device, test_loader, is_test_set=False):
     model.eval()
@@ -164,6 +166,7 @@ def main():
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
+    parser.add_argument('--cluster', action='store_true', help='Clusters the neurons into class groups.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -279,6 +282,9 @@ def main():
 
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader)
+
+            if tracker is not None:
+                tracker.generate_heatmap('/home/tim/data/plots/corr')
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),

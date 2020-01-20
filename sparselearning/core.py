@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data.sampler import SubsetRandomSampler
 
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.mixture import GaussianMixture
 import numpy as np
 import math
 import os
@@ -34,11 +36,14 @@ class CorrelationTracker(object):
         self.momentum = momentum
         self.label_vector = None
         self.name2accs = {}
+        self.name2clusters = {}
+        self.prev_idx = None
 
     def wrap_model(self, model):
         for n, m in model.named_modules():
             if isinstance(m, torch.nn.Conv2d):
-                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward(name, module, inputs, output))
+                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
+            m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
 
     def set_label(self, label):
         # if mini-batch size is different or label not set
@@ -64,6 +69,8 @@ class CorrelationTracker(object):
         print('Generating heatmaps...')
         for name, corr in self.name2corr.items():
             data = corr.cpu().numpy()
+
+            print(np.max(data), np.min(data), np.mean(data))
             sb.heatmap(data)
             #plt.imshow(data, cmap='hot', interpolation='nearest')
             #heatmap = plt.pcolor(data)
@@ -76,6 +83,20 @@ class CorrelationTracker(object):
             print(name, np.median(acc), np.mean(acc), acc[-5:])
 
         self.name2accs = {}
+
+    def generate_clusters(self):
+        for name, corr in self.name2corr.items():
+            data = corr.cpu().numpy()
+            #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
+            clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
+            #clf = AgglomerativeClustering(n_clusters=None, linkage='complete', affinity='l1', distance_threshold=0.01)
+            #clf = AgglomerativeClustering(self.num_labels, linkage='complete', affinity='l1')
+            #clf = DBSCAN()
+            t0 = time.time()
+            clf = clf.fit(data)
+            clusters = clf.predict(data)
+            #clusters = clf.labels_
+            self.name2clusters[name] = torch.from_numpy(clusters).to(corr.device)
 
     def predict(self, name, activation, topk=1):
         corr = self.name2corr[name].clone()
@@ -96,25 +117,75 @@ class CorrelationTracker(object):
         # cutoff based on class probability distribution
         #return F.normalize(preds)
 
-    def forward(self, name, module, inputs, activation):
+    def rearrange(self, clusters, module, corr):
+        # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
+        if self.prev_idx is not None:
+            if module.weight.data.shape[1] == self.prev_idx.shape[0]:
+                module.weight.data = module.weight.data[:, self.prev_idx]
+        if len(self.name2clusters) == 0:
+            self.prev_idx = None
+            return
+        n = clusters.numel()
+        idx_map = []
+        val = torch.unique(clusters)
+        for i in range(val.numel()):
+        #for i in range(self.num_labels):
+            lbl_idx = torch.where(clusters==i)[0].view(-1, 1)
+            idx_map.append(lbl_idx)
+
+        idx = torch.cat(idx_map, 0).view(-1)
+
+        corr = corr[idx]
+        module.weight.data = module.weight.data[idx]
+        if hasattr(module, 'bias') and module.bias is not None:
+            module.bias.data = module.bias.data[idx]
+        self.prev_idx = idx
+
+    def forward_other(self, name, module, inputs):
+        if name in self.name2clusters:
+            self.rearrange(self.name2clusters.pop(name), module, self.name2corr[name])
+
+        if not module.training and self.prev_idx is not None:
+            if isinstance(module, nn.BatchNorm2d):
+                if module.weight.shape[0] == self.prev_idx.shape[0]:
+                    module.weight.data = module.weight.data[self.prev_idx]
+                    module.bias.data = module.bias.data[self.prev_idx]
+                    module.running_mean.data = module.running_mean.data[self.prev_idx]
+                    module.running_var.data = module.running_var.data[self.prev_idx]
+                    #module.reset_running_stats()
+            elif isinstance(module, nn.Linear):
+                pass
+                #if module.weight.shape[1] == self.prev_idx.shape[0]:
+                #    module.weight.data = module.weight.data[:, self.prev_idx]
+                #module.bias.data = module.bias.data[self.prev_idx]
+            elif isinstance(module, nn.BatchNorm1d):
+                module.reset_running_stats()
+                pass
+
+
+    def forward_conv(self, name, module, inputs, activation):
         #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)
+
         x = activation.data.clone()
         x = x.sum([2,3])
         x -= x.mean(0)
         std = x.std(0)
         std[std==0] = 1.0
         x /= std
-        corr = torch.mm(x.T, self.label)/x.shape[0]
-        if name not in self.name2corr:
-            self.name2corr[name] = corr
+        if module.training:
+            corr = torch.mm(x.T, self.label)/x.shape[0]
+            if name not in self.name2corr:
+                self.name2corr[name] = corr
+            else:
+                m = self.name2corr[name]
+                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
+            corr = self.name2corr[name]
         else:
-            m = self.name2corr[name]
-            self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
+            corr = self.name2corr[name]
 
         preds = self.predict(name, x, topk=3)
-        corr = self.name2corr[name]
         #self.all_class_correlation_pruning(preds, corr, activation, 0.3)
-        self.max_class_correlation_pruning(preds, corr, activation, 0.3, 3)
+        #self.max_class_correlation_pruning(preds, corr, activation, 0.3, 3)
 
     def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3):
         top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
