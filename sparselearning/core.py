@@ -8,6 +8,8 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import MinMaxScaler
+
 import numpy as np
 import math
 import os
@@ -70,14 +72,9 @@ class CorrelationTracker(object):
         for name, corr in self.name2corr.items():
             data = corr.cpu().numpy()
 
-            print(np.max(data), np.min(data), np.mean(data))
             sb.heatmap(data)
-            #plt.imshow(data, cmap='hot', interpolation='nearest')
-            #heatmap = plt.pcolor(data)
-            #plt.colorbar()
             plt.savefig(os.path.join(path, '{0}.png'.format(name)))
             plt.clf()
-            #print(corr.sum().item(),name, corr.max().item(), corr.min().item())
 
         for name, acc in self.name2accs.items():
             print(name, np.median(acc), np.mean(acc), acc[-5:])
@@ -87,8 +84,10 @@ class CorrelationTracker(object):
     def generate_clusters(self):
         for name, corr in self.name2corr.items():
             data = corr.cpu().numpy()
+            data = MinMaxScaler().fit_transform(data)
+            clf = KMeans(5, verbose=1, n_jobs=-1, tol=0, n_init=30, max_iter=300)
             #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
-            clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
+            #clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
             #clf = AgglomerativeClustering(n_clusters=None, linkage='complete', affinity='l1', distance_threshold=0.01)
             #clf = AgglomerativeClustering(self.num_labels, linkage='complete', affinity='l1')
             #clf = DBSCAN()
@@ -102,20 +101,49 @@ class CorrelationTracker(object):
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
         preds = torch.mm(activation, corr)
-
-
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
         for i in range(topk):
             correct += (self.label_vector == ids[:, i]).sum().item()
 
         acc = correct/self.label_vector.numel()
+
         if name not in self.name2accs: self.name2accs[name] = []
         self.name2accs[name].append(acc)
 
         return preds
         # cutoff based on class probability distribution
         #return F.normalize(preds)
+
+    def predict_with_features(self, name, activation):
+        full_acc = self.name2accs[name][-1]
+        corr = self.name2corr[name].clone()
+        #corr[torch.abs(corr) < 0.2] = 0.0
+        labels = torch.eye(self.num_labels).to(corr.device)
+        labels[labels == 0.0] = -1.0/self.num_labels
+        #labels[labels == 0.0] = -1.0
+        #preds = torch.mm(activation, corr)
+        #feats = torch.mm(preds, corr.T)
+        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
+
+        feats_sorted = torch.argsort(feats, dim=1, descending=True)
+        partial_corr = torch.zeros_like(corr)
+
+        for k in range(activation.shape[1]):
+            partial_corr.zero_()
+            idx = feats_sorted[:, :k].reshape(-1)
+            partial_corr[idx] = corr[idx]
+
+            preds = torch.mm(activation, partial_corr)
+
+            val, ids = torch.topk(preds, k=1, dim=1, largest=True)
+            correct = 0
+            correct += (self.label_vector == ids[:, 0]).sum().item()
+
+            acc = correct/self.label_vector.numel()
+            if k < 16 or k % 16 == 0:
+                print('Acc for {1} features: {0}. Acc ratio: {2}'.format(acc, k, acc/full_acc))
+
 
     def rearrange(self, clusters, module, corr):
         # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
@@ -172,6 +200,9 @@ class CorrelationTracker(object):
         std = x.std(0)
         std[std==0] = 1.0
         x /= std
+        if name in self.name2corr:
+            preds = self.predict(name, x, topk=1)
+            self.predict_with_features(name, x)
         if module.training:
             corr = torch.mm(x.T, self.label)/x.shape[0]
             if name not in self.name2corr:
@@ -183,44 +214,52 @@ class CorrelationTracker(object):
         else:
             corr = self.name2corr[name]
 
-        preds = self.predict(name, x, topk=3)
-        #self.all_class_correlation_pruning(preds, corr, activation, 0.3)
-        #self.max_class_correlation_pruning(preds, corr, activation, 0.3, 3)
+        #self.all_class_correlation_pruning(preds, corr, activation, 0.2, x)
+        #self.max_class_correlation_pruning(preds, corr, activation, 0.2, 3, np.mean(self.name2accs[name]))
 
-    def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3):
+    def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3, accs=None):
         top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
 
-        labels = torch.zeros(top_preds.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)
+        #fraction = 1.0-accs
+        labels = torch.ones(top_preds.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)*-1
         labels = labels.to(device=top_preds.device)
 
         labels.scatter_(1, top_preds, 1)
 
-        feats = torch.mm(labels*preds, corr.T)
+        #print(labels[:3])
+        feats = torch.mm(labels, corr.T)
         n = activation.shape[1]
         top_feats = math.ceil(n*fraction)
         feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask = torch.zeros_like(feats)
+        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
         #feats = (feats > feat_val[:, -1].view(-1, 1)).float().view(feats.shape[0], feats.shape[1], 1, 1)
         #print((feats==0.0).sum().item(), (feats!=0.0).sum().item(), 'feats')
-        activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        #activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        activation*= feats.view(feats.shape[0], feats.shape[1], 1, 1)
         #activation= activation*feats
 
 
 
-    def all_class_correlation_pruning(self, preds, corr, activation, fraction):
+    def all_class_correlation_pruning(self, preds, corr, activation, fraction, x):
         # cutoff based on class probability distribution
         #normed_preds = F.normalize(preds)
         #normed_corr = F.normalize(corr.clone())
         #feats = torch.mm(normed_preds, normed_corr.T)
         #feats = torch.mm(normed_preds, corr.T)
         feats = torch.mm(preds, corr.T)
+        print(feats.shape)
         n = activation.shape[1]
         top_feats = math.ceil(n*fraction)
         feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        feats[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        feats[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        #print(feat_val[:, -1])
+        mask = torch.zeros_like(feats)
+        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
+        activation.data = activation.data*mask.view(mask.shape[0], mask.shape[1], 1, 1)
 
 
 
