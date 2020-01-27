@@ -78,7 +78,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         if lr_scheduler is not None: lr_scheduler.step()
         data, target = data.to(device), target.to(device)
 
-        if tracker is not None: tracker.set_label(target)
+        if tracker is not None:
+            tracker.set_label(target)
 
         if args.fp16: data = data.half()
         optimizer.zero_grad()
@@ -100,11 +101,12 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
     if tracker is not None:
-        if args.cluster:
+        if args.cluster and (epoch-1) % 3 == 0:
+            print('Restructing layers....')
             tracker.generate_clusters()
         #tracker.generate_heatmap('/home/tim/data/plots/corr')
 
-def evaluate(args, model, device, test_loader, is_test_set=False):
+def evaluate(args, model, device, test_loader, is_test_set=False, tracker=None):
     model.eval()
     test_loss = 0
     correct = 0
@@ -112,6 +114,7 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
+            if tracker is not None: tracker.set_label(target)
             if args.fp16: data = data.half()
             model.t = target
             output = model(data)
@@ -245,7 +248,7 @@ def main():
                 print_and_log("=> loaded checkpoint '{}' (epoch {})"
                       .format(args.resume, checkpoint['epoch']))
                 print_and_log('Testing...')
-                evaluate(args, model, device, test_loader)
+                evaluate(args, model, device, test_loader, tracker=tracker)
                 model.feats = []
                 model.densities = []
                 plot_class_feature_histograms(args, model, device, train_loader, optimizer)
@@ -263,8 +266,7 @@ def main():
 
         tracker = CorrelationTracker(num_labels=10)
         tracker.wrap_model(model)
-        #tracker = None
-
+        tracker.build_graph(model)
 
         mask = None
         if not args.dense:
@@ -281,10 +283,10 @@ def main():
             train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, tracker)
 
             if args.valid_split > 0.0:
-                val_acc = evaluate(args, model, device, valid_loader)
+                val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
 
             if tracker is not None:
-                tracker.generate_heatmap('/home/tim/data/plots/corr')
+                tracker.generate_heatmap('/home/tim/data/plots/corr_{0}'.format(args.model))
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),
@@ -296,7 +298,7 @@ def main():
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
-        evaluate(args, model, device, test_loader, is_test_set=True)
+        evaluate(args, model, device, test_loader, is_test_set=True, tracker=tracker)
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
 
 if __name__ == '__main__':

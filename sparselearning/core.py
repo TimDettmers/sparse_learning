@@ -19,6 +19,7 @@ import seaborn as sb
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
+torch.nn.Module
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
@@ -37,15 +38,39 @@ class CorrelationTracker(object):
         self.name2corr = {}
         self.momentum = momentum
         self.label_vector = None
-        self.name2accs = {}
+        self.name2train_accs = {}
+        self.name2val_accs = {}
         self.name2clusters = {}
+        self.name2prev_clusters = {}
         self.prev_idx = None
+        self.iter = 0
+        self.name2module = {}
+        self.name2idx = {}
+        self.idx2name = {}
 
     def wrap_model(self, model):
         for n, m in model.named_modules():
             if isinstance(m, torch.nn.Conv2d):
                 m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
             m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
+
+    def build_graph(self, model):
+        i = 0
+        for pname, pmodule in model.named_modules():
+            num_children = len(list(pmodule.named_children()))
+            if num_children > 0:
+                for cname, cmodule in pmodule.named_children():
+                    if pname == '': continue
+
+                    name = '{0}.{1}'.format(pname, cname)
+                    self.name2module[name] = cmodule
+                    self.name2idx[name] = i
+                    self.idx2name[i] = name
+                    i+= 1
+
+        for i in range(len(self.idx2name)):
+            name = self.idx2name[i]
+            module = self.name2module[name]
 
     def set_label(self, label):
         # if mini-batch size is different or label not set
@@ -72,20 +97,33 @@ class CorrelationTracker(object):
         for name, corr in self.name2corr.items():
             data = corr.cpu().numpy()
 
-            sb.heatmap(data)
-            plt.savefig(os.path.join(path, '{0}.png'.format(name)))
+            sb.heatmap(data, vmin=-0.8, vmax=0.8)
+            plt.savefig(os.path.join(path, '{0}_{1}.png'.format(name, self.iter)))
             plt.clf()
+        self.iter += 1
 
-        for name, acc in self.name2accs.items():
+        print('TRAIN:')
+        print('='*80)
+        for name, acc in self.name2train_accs.items():
+            print(name, np.median(acc), np.mean(acc), acc[-5:])
+        print('VALID:')
+        print('='*80)
+        for name, acc in self.name2val_accs.items():
             print(name, np.median(acc), np.mean(acc), acc[-5:])
 
-        self.name2accs = {}
+        for name, corr in self.name2corr.items():
+            imgpath = os.path.join(path, '{0}_%d.png'.format(name))
+            movie_path = os.path.join(path, '{0}.mp4'.format(name))
+            os.system("ffmpeg -r 3 -i {0} -vcodec mpeg4 -y {1} -v 0".format(imgpath, movie_path))
+
+        self.name2train_accs = {}
+        self.name2val_accs = {}
 
     def generate_clusters(self):
         for name, corr in self.name2corr.items():
             data = corr.cpu().numpy()
-            data = MinMaxScaler().fit_transform(data)
-            clf = KMeans(5, verbose=1, n_jobs=-1, tol=0, n_init=30, max_iter=300)
+            #data = MinMaxScaler().fit_transform(data)
+            clf = KMeans(10, verbose=0, n_jobs=-1, tol=0, n_init=30, max_iter=300)
             #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
             #clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
             #clf = AgglomerativeClustering(n_clusters=None, linkage='complete', affinity='l1', distance_threshold=0.01)
@@ -96,11 +134,26 @@ class CorrelationTracker(object):
             clusters = clf.predict(data)
             #clusters = clf.labels_
             self.name2clusters[name] = torch.from_numpy(clusters).to(corr.device)
+            print(clf.cluster_centers_)
+            labels = torch.eye(self.num_labels).to(corr.device)
+            labels[labels == 0.0] = -1.0/self.num_labels
+            clusters = torch.from_numpy(clf.cluster_centers_).to(corr.device)
 
-    def predict(self, name, activation, topk=1):
+            # labelxlabel cluster feats -> label x feats
+            preds = torch.mm(labels, clusters.T)
+            print(preds.shape)
+            val, idx = torch.topk(preds, dim=0, k=3, largest=True) # max over label to get the clusters for each label
+            print('='*80)
+            print(idx)
+            print(val)
+
+            #print(np.argmax(cluster2labels))
+
+    def predict(self, name, activation, topk=1, is_train=True):
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
-        preds = torch.mm(activation, corr)
+        #preds = torch.mm(activation, corr)
+        preds = torch.mm(torch.mm(activation, torch.mm(corr, corr.T)), corr)
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
         for i in range(topk):
@@ -108,15 +161,19 @@ class CorrelationTracker(object):
 
         acc = correct/self.label_vector.numel()
 
-        if name not in self.name2accs: self.name2accs[name] = []
-        self.name2accs[name].append(acc)
+        if is_train:
+            if name not in self.name2train_accs: self.name2train_accs[name] = []
+            self.name2train_accs[name].append(acc)
+        else:
+            if name not in self.name2val_accs: self.name2val_accs[name] = []
+            self.name2val_accs[name].append(acc)
 
         return preds
         # cutoff based on class probability distribution
         #return F.normalize(preds)
 
     def predict_with_features(self, name, activation):
-        full_acc = self.name2accs[name][-1]
+        full_acc = self.name2train_accs[name][-1]
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
         labels = torch.eye(self.num_labels).to(corr.device)
@@ -145,8 +202,9 @@ class CorrelationTracker(object):
                 print('Acc for {1} features: {0}. Acc ratio: {2}'.format(acc, k, acc/full_acc))
 
 
-    def rearrange(self, clusters, module, corr):
+    def rearrange(self, name, clusters, module, corr):
         # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
+        self.name2prev_clusters[name] = clusters
         if self.prev_idx is not None:
             if module.weight.data.shape[1] == self.prev_idx.shape[0]:
                 module.weight.data = module.weight.data[:, self.prev_idx]
@@ -163,7 +221,7 @@ class CorrelationTracker(object):
 
         idx = torch.cat(idx_map, 0).view(-1)
 
-        corr = corr[idx]
+        self.name2corr[name] = corr[idx]
         module.weight.data = module.weight.data[idx]
         if hasattr(module, 'bias') and module.bias is not None:
             module.bias.data = module.bias.data[idx]
@@ -171,7 +229,7 @@ class CorrelationTracker(object):
 
     def forward_other(self, name, module, inputs):
         if name in self.name2clusters:
-            self.rearrange(self.name2clusters.pop(name), module, self.name2corr[name])
+            self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
 
         if not module.training and self.prev_idx is not None:
             if isinstance(module, nn.BatchNorm2d):
@@ -201,8 +259,8 @@ class CorrelationTracker(object):
         std[std==0] = 1.0
         x /= std
         if name in self.name2corr:
-            preds = self.predict(name, x, topk=1)
-            self.predict_with_features(name, x)
+            preds = self.predict(name, x, topk=2, is_train=module.training)
+            #self.predict_with_features(name, x)
         if module.training:
             corr = torch.mm(x.T, self.label)/x.shape[0]
             if name not in self.name2corr:
@@ -212,10 +270,68 @@ class CorrelationTracker(object):
                 self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
             corr = self.name2corr[name]
         else:
-            corr = self.name2corr[name]
-
-        #self.all_class_correlation_pruning(preds, corr, activation, 0.2, x)
+            if name in self.name2corr:
+                corr = self.name2corr[name]
+                #self.all_class_correlation_pruning(corr, x, activation, 0.1)
+                self.cluster_drop(name, activation)
         #self.max_class_correlation_pruning(preds, corr, activation, 0.2, 3, np.mean(self.name2accs[name]))
+
+    def cluster_drop(self, name, activation):
+        if name != self.idx2name[0]: return
+        #if name in self.name2prev_clusters:
+        #    print('DROPPING CLUSTER: {0}'.format(name))
+        #    clusters = self.name2prev_clusters[name]
+        #    k = 5
+        #    for i in range(k):
+        #        idx = clusters == i
+        #        activation[:, idx] = 0.0
+
+    def all_class_correlation_pruning(self, corr, x, activation, fraction):
+        preds = torch.mm(torch.mm(x, torch.mm(corr, corr.T)), corr)
+        #preds = torch.mm(x, torch.mm(corr.T, torch.mm(corr, corr.T)))
+        # cutoff based on class probability distribution
+        #normed_preds = F.normalize(preds)
+        #normed_corr = F.normalize(corr.clone())
+        #feats = torch.mm(normed_preds, normed_corr.T)
+        #feats = torch.mm(normed_preds, corr.T)
+        #feats = torch.mm(torch.mm(preds, corr.T), torch.mm(corr, corr.T))
+        feats = torch.mm(preds, corr.T)
+        #print(feats.shape)
+        n = x.shape[1]
+        top_feats = math.ceil(n*fraction)
+        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        #print(feat_val[:, -1])
+        mask = torch.zeros_like(feats)
+        counts = torch.histc(feats, bins=100, min=-3.0, max = 3.0)
+        #print('='*80)
+        #print(feat_val[:, -1])
+        #print(counts.long())
+        #print(np.linspace(-3.0, 3.0, 100))
+
+
+        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
+        activation *= activation*mask.view(mask.shape[0], mask.shape[1], 1, 1)
+
+    def all_class_correlation_selection(self, corr, x, activation, fraction):
+        n = x.shape[1]
+        k = math.ceil(n*fraction)#/self.num_labels)
+
+        labels = torch.eye(self.num_labels).to(corr.device)
+        labels[labels == 0.0] = -1.0/self.num_labels
+        #labels[labels == 0.0] = -1.0
+        #preds = torch.mm(activation, corr)
+        #feats = torch.mm(preds, corr.T)
+        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
+
+        feats_sorted = torch.argsort(feats, dim=1, descending=True)
+        partial_corr = torch.zeros_like(corr)
+
+        idx = feats_sorted[:, -k:]
+        idx = idx.reshape(-1).unique()
+        activation[:, idx] = 0.0
+
 
     def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3, accs=None):
         top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
@@ -242,24 +358,6 @@ class CorrelationTracker(object):
         #activation= activation*feats
 
 
-
-    def all_class_correlation_pruning(self, preds, corr, activation, fraction, x):
-        # cutoff based on class probability distribution
-        #normed_preds = F.normalize(preds)
-        #normed_corr = F.normalize(corr.clone())
-        #feats = torch.mm(normed_preds, normed_corr.T)
-        #feats = torch.mm(normed_preds, corr.T)
-        feats = torch.mm(preds, corr.T)
-        print(feats.shape)
-        n = activation.shape[1]
-        top_feats = math.ceil(n*fraction)
-        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        #print(feat_val[:, -1])
-        mask = torch.zeros_like(feats)
-        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
-        activation.data = activation.data*mask.view(mask.shape[0], mask.shape[1], 1, 1)
 
 
 
