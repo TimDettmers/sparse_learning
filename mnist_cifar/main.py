@@ -101,9 +101,10 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
     if tracker is not None:
-        if args.cluster and (epoch-1) % 3 == 0:
+        if args.cluster and (epoch-1) % 1 == 0:
             print('Restructing layers....')
-            tracker.generate_clusters()
+            #tracker.generate_clusters()
+            tracker.make_generalists_clusters()
         #tracker.generate_heatmap('/home/tim/data/plots/corr')
 
 def evaluate(args, model, device, test_loader, is_test_set=False, tracker=None):
@@ -190,6 +191,7 @@ def main():
     print_and_log('='*80)
     print_and_log('Running with seed: {0}'.format(args.seed))
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     for i in range(args.iters):
         print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
@@ -264,9 +266,9 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
-        tracker = CorrelationTracker(num_labels=10)
-        tracker.wrap_model(model)
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9)
         tracker.build_graph(model)
+        tracker.wrap_model(model)
 
         mask = None
         if not args.dense:
@@ -286,7 +288,9 @@ def main():
                 val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
 
             if tracker is not None:
-                tracker.generate_heatmap('/home/tim/data/plots/corr_{0}'.format(args.model))
+                if epoch > 0:
+                    tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
+                    tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),
@@ -295,6 +299,8 @@ def main():
 
             if not args.dense and epoch < args.epochs:
                 mask.at_end_of_epoch()
+
+            #tracker.propagate_correlations()
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 

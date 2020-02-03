@@ -8,7 +8,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 import numpy as np
 import math
@@ -50,9 +50,129 @@ class CorrelationTracker(object):
 
     def wrap_model(self, model):
         for n, m in model.named_modules():
+            #if isinstance(m, torch.nn.ReLU):
+            #    idx = self.name2idx[n]
+            #    m1 = self.name2module[self.idx2name[idx-1]] if idx-1 > 0 else None
+            #    m2 = self.name2module[self.idx2name[idx-2]] if idx-2 > 0 else None
+            #    if (m1 is not None and isinstance(m1, torch.nn.Conv2d)) or \
+            #       (m2 is not None and isinstance(m2, torch.nn.Conv2d)):
+            #        m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
+
             if isinstance(m, torch.nn.Conv2d):
                 m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
             m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
+
+    def network_class_correlation_plot(self, path):
+        if not os.path.exists(path): os.makedirs(path)
+
+        dmax = 0
+        for name, corr in self.name2corr.items():
+            if corr.shape[0] > dmax:
+                dmax = corr.shape[0]
+
+
+        network = np.zeros((dmax, len(self.name2corr)), dtype=np.float32)
+        for cls in range(1):
+            print('Plotting for class {0}...'.format(cls))
+            names = list(self.name2corr.keys())
+            layer_idx = 0
+            print(names)
+            for name1, name2 in zip(names[:-1], names[1:]):
+                corr1 = self.name2corr[name1].clone().mean([1, 2])
+                corr2 = self.name2corr[name2].clone().mean([1, 2])
+                module2 = self.name2module[name2]
+                w = module2.weight.data.sum([2, 3]).permute([1,0])
+                n1 = corr1.shape[0]
+                n2 = corr2.shape[0]
+                #network[:n1, layer_idx] = corr1[:, cls].cpu().numpy()
+                layer_idx += 1
+
+                dmax_local = max(corr1.shape[0], corr2.shape[0])
+                rep = 20
+                l2l = np.zeros((n1+rep, n2+rep), dtype=np.float32)
+                # corr1 [n1, 1]
+                # corr2 [n2, 1]
+                # l2l [n1+1, n2+1]
+                l2l[:-rep, :rep] = corr1[:, cls].unsqueeze(-1).cpu().numpy()
+                l2l[:-rep, rep:] = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(w.cpu().numpy())
+                #l2l[:-rep, rep:] = StandardScaler().fit_transform(w.cpu().numpy())
+                #l2l[:-rep, rep:]/= np.abs(l2l[:-rep, rep:]).max(0)/0.8
+                l2l[-rep:, rep:] = corr2[:, cls].unsqueeze(0).cpu().numpy()
+                fig = sb.heatmap(l2l, vmin=-0.8, vmax=0.8)
+                #print(fig)
+
+                #fig.set_size_inches(18.5, 10.5)
+                plt.savefig(os.path.join(path, '{0}_to_{1}_{2}.png'.format(name1, name2,cls)), dpi=300)
+                plt.close()
+                plt.clf()
+
+            #sb.heatmap(network, vmin=-0.8, vmax=0.8)
+            #plt.savefig(os.path.join(path, '{0}.png'.format(cls)))
+            #plt.clf()
+
+
+
+
+    def propagate_correlations(self):
+        #if len(self.name2prev_clusters) == 0: return
+        names = list(self.name2corr.keys())
+        for name1, name2 in zip(names[:-1], names[1:]):
+            corr1 = self.name2corr[name1]
+            corr2 = self.name2corr[name2]
+            module2 = self.name2module[name2]
+            #clusters1 = self.name2prev_clusters[name1]
+
+            padded_corr1 = corr1.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
+
+            with torch.no_grad():
+                prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
+            corr3 = prop_corr.mean([2, 3]).permute([1, 0])
+            print(name2)
+            print('Baseline: ', torch.sqrt((corr2-corr3)**2).mean(0))
+
+            print(module2.weight.shape, corr1.shape, corr2.shape)
+
+            corr4 = module2.weight.unsqueeze(-1)*corr1.view(1, corr1.shape[0], 1, 1, corr1.shape[1])
+            print(corr4.shape)
+            corr4 = corr4.sum([1, 2, 3])
+            print(corr4.shape)
+            print(corr2[:3])
+            print(corr4[:3])
+            print(F.normalize(corr2[:3]))
+            print(F.normalize(corr4[:3]))
+            print('Baseline: ', torch.sqrt((corr2-corr4)**2).mean(0))
+
+            #labels = torch.eye(self.num_labels).to(corr1.device)
+            #labels[labels == 0.0] = -1.0/self.num_labels
+            #feats = torch.mm(labels, torch.mm(corr1.T, torch.mm(corr1, corr1.T)))
+            #feats_sorted = torch.argsort(feats, dim=1, descending=True)
+
+            #for k in range(corr1.shape[0]):
+            #    partial_corr = torch.zeros_like(corr1)
+            #    partial_corr.zero_()
+            #    idx = feats_sorted[:, :k].reshape(-1)
+            #    partial_corr[idx] = corr1[idx]
+
+            #    padded_corr1 = partial_corr.permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            #    padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
+
+            #    with torch.no_grad():
+            #        prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
+            #    corr3 = prop_corr.mean([2, 3]).permute([1, 0])
+            #    print('K-features {0}: {1}'.format(k, torch.sqrt((corr2-corr3)**2).mean(0)))
+
+
+
+            #padded_corr2 = corr2.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            #padded_corr2 = F.pad(padded_corr2, [1, 1, 1, 1])
+            #with torch.no_grad():
+            #    prop_corr2 = F.conv_transpose2d(padded_corr2, module2.weight, None, module2.stride, module2.padding)
+            #corr4 = prop_corr2.mean([2, 3]).permute([1, 0])
+            #corr1 = self.name2corr[name1]
+            #print(name1, torch.sqrt((corr1-corr4)**2).mean(0))
+
+            print('='*80)
 
     def build_graph(self, model):
         i = 0
@@ -67,6 +187,13 @@ class CorrelationTracker(object):
                     self.name2idx[name] = i
                     self.idx2name[i] = name
                     i+= 1
+            else:
+                if pname == '': continue
+                name = '{0}'.format(pname)
+                self.name2module[name] = pmodule
+                self.name2idx[name] = i
+                self.idx2name[i] = name
+                i+= 1
 
         for i in range(len(self.idx2name)):
             name = self.idx2name[i]
@@ -95,7 +222,7 @@ class CorrelationTracker(object):
 
         print('Generating heatmaps...')
         for name, corr in self.name2corr.items():
-            data = corr.cpu().numpy()
+            data = corr.mean([1,2]).cpu().numpy()
 
             sb.heatmap(data, vmin=-0.8, vmax=0.8)
             plt.savefig(os.path.join(path, '{0}_{1}.png'.format(name, self.iter)))
@@ -121,8 +248,17 @@ class CorrelationTracker(object):
 
     def generate_clusters(self):
         for name, corr in self.name2corr.items():
-            data = corr.cpu().numpy()
-            #data = MinMaxScaler().fit_transform(data)
+            print('Structuring layer: {0}'.format(name))
+            data = corr.mean([1, 2]).cpu().numpy()
+            layer = self.name2module[name]
+            w = layer.weight.data
+            #data = torch.cat([w.view(w.shape[0], -1), corr.view(corr.shape[0], -1)], dim=1).cpu().numpy()
+            #data = w.view(w.shape[0], -1).cpu().numpy()
+            #data = corr.view(corr.shape[0], -1).cpu().numpy()
+            print('Scaling...')
+            #data = StandardScaler().fit_transform(data)
+            data = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(data)
+            print('Fitting k-Means...')
             clf = KMeans(10, verbose=0, n_jobs=-1, tol=0, n_init=30, max_iter=300)
             #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
             #clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
@@ -134,18 +270,18 @@ class CorrelationTracker(object):
             clusters = clf.predict(data)
             #clusters = clf.labels_
             self.name2clusters[name] = torch.from_numpy(clusters).to(corr.device)
-            print(clf.cluster_centers_)
-            labels = torch.eye(self.num_labels).to(corr.device)
-            labels[labels == 0.0] = -1.0/self.num_labels
-            clusters = torch.from_numpy(clf.cluster_centers_).to(corr.device)
+            #print(clf.cluster_centers_)
+            #labels = torch.eye(self.num_labels).to(corr.device)
+            #labels[labels == 0.0] = -1.0/self.num_labels
+            #clusters = torch.from_numpy(clf.cluster_centers_).to(corr.device)
 
             # labelxlabel cluster feats -> label x feats
-            preds = torch.mm(labels, clusters.T)
-            print(preds.shape)
-            val, idx = torch.topk(preds, dim=0, k=3, largest=True) # max over label to get the clusters for each label
-            print('='*80)
-            print(idx)
-            print(val)
+            #preds = torch.mm(labels, clusters.T)
+            #print(preds.shape)
+            #val, idx = torch.topk(preds, dim=0, k=3, largest=True) # max over label to get the clusters for each label
+            #print('='*80)
+            #print(idx)
+            #print(val)
 
             #print(np.argmax(cluster2labels))
 
@@ -153,7 +289,14 @@ class CorrelationTracker(object):
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
         #preds = torch.mm(activation, corr)
-        preds = torch.mm(torch.mm(activation, torch.mm(corr, corr.T)), corr)
+        #print(corr.shape, activation.shape)
+        #cov = torch.einsum('fhc,fhc->f',corr, corr)
+        #preds_cov = torch.einsum('bfh,f->bf',activation, cov)
+        #preds = torch.einsum('bf,fhc->bc',preds_cov, corr)
+        #preds = torch.einsum('bfh,fhc->bc',activation, corr)
+        preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
+        #cov = torch.mm(corr, corr.T)
+        #preds = torch.mm(torch.mm(activation, cov), corr)
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
         for i in range(topk):
@@ -201,16 +344,61 @@ class CorrelationTracker(object):
             if k < 16 or k % 16 == 0:
                 print('Acc for {1} features: {0}. Acc ratio: {2}'.format(acc, k, acc/full_acc))
 
+    def make_generalists_clusters(self, num_cluster=10):
+        # pick max 1/importance rank * 1/uncorrelated rank *1/num usage 
+        for name, corr in self.name2corr.items():
+            k = corr.shape[0] // num_cluster
+            print('Finding generalists clustser for layer: {0}'.format(name))
+            # [feat, h, w, class]
+
+            r = corr.clone()
+            r -= r.mean(0)
+            std = r.std(0)
+            std[std==0] = 1.0
+            r /= std
+
+            featR = torch.abs(torch.einsum('fhwc,vhwc->fv', r, r))
+            #featR *= (torch.eye(r.shape[0]) == 0).float()
+
+            class_contributions = torch.zeros(self.num_labels).to(corr.device)
+            unused = torch.ones(r.shape[0], 1, 1, 1).to(corr.device)
+
+            cluster = torch.ones(corr.shape[0]).to(corr.device)*-1.0
+            cluster_idx = []
+            target_class = 0
+            for i in range(num_cluster):
+                k = (corr.shape[0] - len(cluster_idx)) if i == (num_cluster-1) else k
+                for j in range(k):
+                    #print(class_contributions)
+                    if target_class == self.num_labels: target_class = 0
+                    #print(target_class, class_contributions)
+                    #if len(cluster_idx) > 0:
+                    #    cross_corr = featR[torch.tensor(cluster_idx)].sum(0)
+                    #else:
+                    #    cross_corr = torch.ones(corr.shape[0]).to(corr.device)
+
+                    score = (corr*unused)[:, :, :, target_class].mean([1, 2])
+                    feat_idx = torch.argmax(torch.abs(score))
+                    unused[feat_idx] = 0
+                    #class_contributions += torch.abs(corr[feat_idx].mean([0,1]))
+                    cluster_idx.append(feat_idx)
+                    cluster[feat_idx] = target_class
+                    target_class += 1
+
+            self.name2clusters[name] = cluster
+
 
     def rearrange(self, name, clusters, module, corr):
+        print('Rearranging neurons...')
         # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
         self.name2prev_clusters[name] = clusters
         if self.prev_idx is not None:
             if module.weight.data.shape[1] == self.prev_idx.shape[0]:
                 module.weight.data = module.weight.data[:, self.prev_idx]
-        if len(self.name2clusters) == 0:
-            self.prev_idx = None
-            return
+        #if len(self.name2clusters) == 0:
+        #    print('end', name)
+        #    self.prev_idx = None
+        #    return
         n = clusters.numel()
         idx_map = []
         val = torch.unique(clusters)
@@ -231,21 +419,29 @@ class CorrelationTracker(object):
         if name in self.name2clusters:
             self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
 
-        if not module.training and self.prev_idx is not None:
+        if self.prev_idx is not None:
+            #print(name, 'fixup')
             if isinstance(module, nn.BatchNorm2d):
+                if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
                 if module.weight.shape[0] == self.prev_idx.shape[0]:
                     module.weight.data = module.weight.data[self.prev_idx]
                     module.bias.data = module.bias.data[self.prev_idx]
                     module.running_mean.data = module.running_mean.data[self.prev_idx]
                     module.running_var.data = module.running_var.data[self.prev_idx]
+                    #self.prev_idx = None
                     #module.reset_running_stats()
             elif isinstance(module, nn.Linear):
-                pass
-                #if module.weight.shape[1] == self.prev_idx.shape[0]:
-                #    module.weight.data = module.weight.data[:, self.prev_idx]
-                #module.bias.data = module.bias.data[self.prev_idx]
+                #if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'linear')
+                if len(self.name2clusters) == 0:
+                    print(self.prev_idx.shape, module.weight.data.shape, inputs[0].shape, inputs[0].stride())
+                    w = module.weight.data
+                    s1 = w.shape[1]
+                    module.weight.data = (module.weight.data.view(w.shape[0], self.prev_idx.shape[0], -1)[:, self.prev_idx]).view(w.shape)
+                    #module.weight.data = module.weight.data[:, self.prev_idx]
+                    #module.bias.data = module.bias.data[self.prev_idx]
+                    self.prev_idx = None
             elif isinstance(module, nn.BatchNorm1d):
-                module.reset_running_stats()
+                #module.reset_running_stats()
                 pass
 
 
@@ -253,16 +449,39 @@ class CorrelationTracker(object):
         #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)
 
         x = activation.data.clone()
-        x = x.sum([2,3])
+        #print(x.shape)
+        #target_elements = 2048
+        #num_ele = np.prod(x.shape[1:])
+        #reduction = int(num_ele/target_elements)
+        #print(reduction)
+        #x = x.view(x.shape[0], x.shape[1], -1)
+        #print(x.shape)
+        #x = torch.chunk(x,reduction, dim=2)
+        #print(x.shape)
+        #x = x.sum(-1)
+        #print(x.shape)
+        #print('=========')
+
+        #x -= x.mean([0, 1])
+        #std = x.std([0, 1])
+        #std[std==0] = 1.0
+        #x /= std
+        #x = x.sum([2])
+
+        #x = x.sum([2, 3])
+
         x -= x.mean(0)
         std = x.std(0)
         std[std==0] = 1.0
         x /= std
         if name in self.name2corr:
-            preds = self.predict(name, x, topk=2, is_train=module.training)
+            preds = self.predict(name, x, topk=1, is_train=module.training)
             #self.predict_with_features(name, x)
         if module.training:
-            corr = torch.mm(x.T, self.label)/x.shape[0]
+            #corr = torch.mm(x.T, self.label)/x.shape[0]
+            #corr = torch.einsum('bf,bc->fc', x, self.label)/x.shape[0]
+            #corr = torch.einsum('bfh,bc->fhc', x, self.label)/x.shape[0]
+            corr = torch.einsum('bfhw,bc->fhwc', x, self.label)/x.shape[0]
             if name not in self.name2corr:
                 self.name2corr[name] = corr
             else:
@@ -272,19 +491,22 @@ class CorrelationTracker(object):
         else:
             if name in self.name2corr:
                 corr = self.name2corr[name]
-                #self.all_class_correlation_pruning(corr, x, activation, 0.1)
                 self.cluster_drop(name, activation)
+                #self.all_class_correlation_pruning(corr, x, activation, 0.1)
+                #self.cluster_drop(name, activation)
         #self.max_class_correlation_pruning(preds, corr, activation, 0.2, 3, np.mean(self.name2accs[name]))
 
-    def cluster_drop(self, name, activation):
-        if name != self.idx2name[0]: return
-        #if name in self.name2prev_clusters:
-        #    print('DROPPING CLUSTER: {0}'.format(name))
-        #    clusters = self.name2prev_clusters[name]
-        #    k = 5
-        #    for i in range(k):
-        #        idx = clusters == i
-        #        activation[:, idx] = 0.0
+    def cluster_drop(self, name, activation, num_layers=100):
+        #names = list(self.name2corr.keys())
+        #names = set(names[-3:])
+        #if name not in names: return
+        k = 2
+        if name in self.name2prev_clusters:
+            #print('DROPPING {1} CLUSTERS FOR LAYER {0}'.format(name, k))
+            clusters = self.name2prev_clusters[name]
+            for i in range(k):
+                idx = clusters == self.num_labels-(1+i)
+                activation[:, idx] = 0.0
 
     def all_class_correlation_pruning(self, corr, x, activation, fraction):
         preds = torch.mm(torch.mm(x, torch.mm(corr, corr.T)), corr)
