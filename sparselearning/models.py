@@ -430,6 +430,9 @@ class BasicBlock(nn.Module):
     """
     def __init__(self, in_planes, out_planes, stride, dropRate=0.0, save_features=False, bench=None):
         super(BasicBlock, self).__init__()
+        self.equalInOut = (in_planes == out_planes)
+        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                               padding=0, bias=False) or None
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.relu1 = nn.ReLU(inplace=True)
         self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -439,9 +442,6 @@ class BasicBlock(nn.Module):
         self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1,
                                padding=1, bias=False)
         self.droprate = dropRate
-        self.equalInOut = (in_planes == out_planes)
-        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
-                               padding=0, bias=False) or None
         self.feats = []
         self.densities = []
         self.save_features = save_features

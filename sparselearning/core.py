@@ -9,6 +9,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.linear_model import Ridge, LogisticRegression
 
 import numpy as np
 import math
@@ -19,7 +20,6 @@ import seaborn as sb
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
-torch.nn.Module
 
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
@@ -29,6 +29,17 @@ def add_sparse_args(parser):
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
     parser.add_argument('--dense', action='store_true', help='Enable dense mode. Default: False.')
     parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
+
+
+class LinearModel(torch.nn.Module):
+    def __init__(self):
+        super(LinearModel, self).__init__()
+        self.fc = nn.Linear(13*10, 10)
+        self.loss = nn.CrossEntropyLoss()
+
+    def forward(self, x):
+        return self.fc(x)
+
 
 class CorrelationTracker(object):
     def __init__(self, num_labels, momentum=0.9):
@@ -40,6 +51,7 @@ class CorrelationTracker(object):
         self.label_vector = None
         self.name2train_accs = {}
         self.name2val_accs = {}
+        self.val_accs_ensemble = []
         self.name2clusters = {}
         self.name2prev_clusters = {}
         self.prev_idx = None
@@ -47,6 +59,15 @@ class CorrelationTracker(object):
         self.name2module = {}
         self.name2idx = {}
         self.idx2name = {}
+        self.name2prev_idx = {}
+        self.train_votes = []
+        self.val_votes = []
+        self.lbls = []
+        self.w = torch.nn.Linear(13*10, 10, bias=True).cuda()
+        self.clf = LogisticRegression(solver='sag', multi_class='auto', max_iter=100)
+        self.model = LinearModel().cuda()
+        #self.opt = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        self.opt = torch.optim.SGD(self.w.parameters(), lr=0.01, momentum=0.9)
 
     def wrap_model(self, model):
         for n, m in model.named_modules():
@@ -229,6 +250,12 @@ class CorrelationTracker(object):
             plt.clf()
         self.iter += 1
 
+        for name, corr in self.name2corr.items():
+            imgpath = os.path.join(path, '{0}_%d.png'.format(name))
+            movie_path = os.path.join(path, '{0}.mp4'.format(name))
+            os.system("ffmpeg -r 3 -i {0} -vcodec mpeg4 -y {1} -v 0".format(imgpath, movie_path))
+
+    def compute_layer_accuracy(self):
         print('TRAIN:')
         print('='*80)
         for name, acc in self.name2train_accs.items():
@@ -238,13 +265,12 @@ class CorrelationTracker(object):
         for name, acc in self.name2val_accs.items():
             print(name, np.median(acc), np.mean(acc), acc[-5:])
 
-        for name, corr in self.name2corr.items():
-            imgpath = os.path.join(path, '{0}_%d.png'.format(name))
-            movie_path = os.path.join(path, '{0}.mp4'.format(name))
-            os.system("ffmpeg -r 3 -i {0} -vcodec mpeg4 -y {1} -v 0".format(imgpath, movie_path))
+        print('ENSEMBLE', np.median(self.val_accs_ensemble), np.mean(self.val_accs_ensemble), self.val_accs_ensemble[-5:])
+
 
         self.name2train_accs = {}
         self.name2val_accs = {}
+        self.val_accs_ensemble = []
 
     def generate_clusters(self):
         for name, corr in self.name2corr.items():
@@ -285,6 +311,61 @@ class CorrelationTracker(object):
 
             #print(np.argmax(cluster2labels))
 
+    def ensemble(self, name):
+        if name == 'features.40' and len(self.val_votes) > 0:
+            # -> bcv
+            votes = torch.cat(self.val_votes, 2)
+            votes = votes.view(votes.shape[0], -1)
+            #out = self.model(votes)
+            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
+            #votes = self.w(votes)
+
+            vals, idx = torch.topk(out, k=1, dim=1)
+            #vals, idx = torch.mode(idx.squeeze())
+            #idx = self.clf.predict(votes)
+            #idx = torch.from_numpy(idx).to(self.label_vector.device)
+
+            self.val_accs_ensemble.append((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
+            self.val_votes = []
+
+        if name == 'features.40' and len(self.train_votes) > 0:
+            votes = torch.cat(self.train_votes, 2)
+            #vals, idx = torch.topk(votes, k=1, dim=1)
+            #modes, idx = torch.mode(idx.squeeze())
+
+            #vals, m = torch.topk(votes, k=1, dim=1)
+            #vals, modes = torch.topk(votes.mean(2), k=1, dim=1)
+
+            votes = votes.view(votes.shape[0], -1)
+            self.opt.zero_grad()
+            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
+            #out = self.model(votes)
+            #print(modes[:4])
+            #print(self.label_vector[:4])
+            loss = self.model.loss(out, self.label_vector)
+            loss.backward()
+            self.opt.step()
+
+            #votes = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #print(votes[0], self.label_vector[0])
+            #votes = self.w(votes).squeeze()
+            #print(votes[0], 'vote0')
+            #print(self.label_vector[0], 'lbl0')
+            #vals, idx = torch.topk(out, k=1, dim=1)
+            #print((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
+            #loss = F.nll_loss(F.log_softmax(votes, dim=1), self.label_vector)
+            #loss.backward()
+            #print('pre', self.w.weight.data)
+            #self.opt.step()
+            #print('post', self.w.weight.data)
+            #self.opt.zero_grad()
+            #self.clf.fit(votes, self.label_vector.cpu().numpy())
+
+            self.train_votes = []
+            self.lbls = []
+
     def predict(self, name, activation, topk=1, is_train=True):
         corr = self.name2corr[name].clone()
         #corr[torch.abs(corr) < 0.2] = 0.0
@@ -297,6 +378,13 @@ class CorrelationTracker(object):
         preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
         #cov = torch.mm(corr, corr.T)
         #preds = torch.mm(torch.mm(activation, cov), corr)
+        if is_train:
+            self.train_votes.append(preds.data.unsqueeze(-1))
+        else:
+            self.val_votes.append(preds.data.unsqueeze(-1))
+
+        self.ensemble(name)
+
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
         for i in range(topk):
@@ -358,6 +446,7 @@ class CorrelationTracker(object):
             r /= std
 
             featR = torch.abs(torch.einsum('fhwc,vhwc->fv', r, r))
+            print(featR[0])
             #featR *= (torch.eye(r.shape[0]) == 0).float()
 
             class_contributions = torch.zeros(self.num_labels).to(corr.device)
@@ -414,13 +503,15 @@ class CorrelationTracker(object):
         if hasattr(module, 'bias') and module.bias is not None:
             module.bias.data = module.bias.data[idx]
         self.prev_idx = idx
+        self.name2prev_clusters[name] = idx
 
     def forward_other(self, name, module, inputs):
+
         if name in self.name2clusters:
             self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
 
         if self.prev_idx is not None:
-            #print(name, 'fixup')
+            print(name, 'fixup')
             if isinstance(module, nn.BatchNorm2d):
                 if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
                 if module.weight.shape[0] == self.prev_idx.shape[0]:
@@ -491,7 +582,7 @@ class CorrelationTracker(object):
         else:
             if name in self.name2corr:
                 corr = self.name2corr[name]
-                self.cluster_drop(name, activation)
+                #self.cluster_drop(name, activation)
                 #self.all_class_correlation_pruning(corr, x, activation, 0.1)
                 #self.cluster_drop(name, activation)
         #self.max_class_correlation_pruning(preds, corr, activation, 0.2, 3, np.mean(self.name2accs[name]))

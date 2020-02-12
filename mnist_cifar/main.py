@@ -289,8 +289,9 @@ def main():
 
             if tracker is not None:
                 if epoch > 0:
-                    tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
-                    tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
+                    #tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
+                    tracker.compute_layer_accuracy()
+                    #tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),
