@@ -94,7 +94,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
     return train_loader, valid_loader, test_loader
 
 
-def get_mnist_dataloaders(args, validation_split=0.0):
+def get_mnist_dataloaders(args, validation_split=0.0, train_samples=1.0):
     """Creates augmented train, validation, and test data loaders."""
     normalize = transforms.Normalize((0.1307,), (0.3081,))
     transform = transform=transforms.Compose([transforms.ToTensor(),normalize])
@@ -111,6 +111,8 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         split = int(np.floor((1.0-validation_split) * len(full_dataset)))
         train_dataset = DatasetSplitter(full_dataset,split_end=split)
         val_dataset = DatasetSplitter(full_dataset,split_start=split)
+        if train_samples < 1.0:
+            train_dataset = DatasetSplitter(train_dataset, split_end=int(split*train_samples))
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,

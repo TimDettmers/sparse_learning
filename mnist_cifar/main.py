@@ -96,11 +96,13 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
 
-def evaluate(args, model, device, test_loader, is_test_set=False):
+def evaluate(args, model, device, test_loader, is_test_set=False, save_preds=False):
     model.eval()
     test_loss = 0
     correct = 0
     n = 0
+    saved_preds = []
+    saved_lbls = []
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
@@ -108,9 +110,20 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
             model.t = target
             output = model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
+            if save_preds:
+                saved_preds.append(output.cpu())
+                saved_lbls.append(target.cpu())
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
             n += target.shape[0]
+
+    if save_preds:
+        preds = torch.cat(saved_preds, 0).numpy()
+        lbls = torch.cat(saved_lbls, 0).numpy()
+        print(lbls.shape)
+        np.save(args.test_save_path, preds)
+        np.save(args.test_save_path.replace('.npy','_lbl.npy'), lbls)
+
 
     test_loss /= float(n)
 
@@ -158,6 +171,8 @@ def main():
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
+    parser.add_argument('--test-save-path', type=str, default='', help='The path for the saved test data')
+    parser.add_argument('--train-fraction', type=float, default=1.0, help='Fraction of the train data to use.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -177,13 +192,16 @@ def main():
     print_and_log('\n\n')
     print_and_log('='*80)
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     for i in range(args.iters):
         print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
         if args.data == 'mnist':
-            train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split)
+            train_loader, valid_loader, test_loader = get_mnist_dataloaders(args, validation_split=args.valid_split, train_samples=args.train_fraction)
         else:
             train_loader, valid_loader, test_loader = get_cifar10_dataloaders(args, args.valid_split, max_threads=args.max_threads)
+
+        print(len(train_loader))
 
         if args.model not in models:
             print('You need to select an existing model via the --model argument. Available models include: ')
@@ -278,7 +296,7 @@ def main():
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
-        evaluate(args, model, device, test_loader, is_test_set=True)
+        evaluate(args, model, device, test_loader, is_test_set=True, save_preds=True)
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
 
 if __name__ == '__main__':
