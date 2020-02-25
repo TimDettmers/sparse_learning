@@ -322,7 +322,7 @@ class VGG16(nn.Module):
                 if batch_norm:
                     layers += [
                         conv2d,
-                        nn.BatchNorm2d(v),
+                        #nn.BatchNorm2d(v),
                         nn.ReLU(inplace=True)
                     ]
                 else:
@@ -476,7 +476,8 @@ class BasicBlock(nn.Module):
         else:
             out = self.conv2(out)
 
-        return torch.add(x if self.equalInOut else self.convShortcut(x), out)
+        #return torch.add(x if self.equalInOut else self.convShortcut(x), out)
+        return out if self.equalInOut else torch.add(out,self.convShortcut(x))
 
 class NetworkBlock(nn.Module):
     """Wide Residual Network network block which holds basic blocks.

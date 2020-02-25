@@ -68,6 +68,10 @@ class CorrelationTracker(object):
         self.model = LinearModel().cuda()
         #self.opt = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
         self.opt = torch.optim.SGD(self.w.parameters(), lr=0.01, momentum=0.9)
+        self.stable_layer_idx = 0
+        self.layerid2val = {}
+        self.layerid2accs = {}
+        self.name2layerid = {}
 
     def wrap_model(self, model):
         for n, m in model.named_modules():
@@ -81,6 +85,8 @@ class CorrelationTracker(object):
 
             if isinstance(m, torch.nn.Conv2d):
                 m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
+            elif isinstance(m, torch.nn.Linear):
+                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_ff(name, module, inputs, output))
             m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
 
     def network_class_correlation_plot(self, path):
@@ -259,13 +265,39 @@ class CorrelationTracker(object):
         print('TRAIN:')
         print('='*80)
         for name, acc in self.name2train_accs.items():
-            print(name, np.median(acc), np.mean(acc), acc[-5:])
+            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
         print('VALID:')
         print('='*80)
-        for name, acc in self.name2val_accs.items():
-            print(name, np.median(acc), np.mean(acc), acc[-5:])
+        for idx, (name, acc) in enumerate(self.name2val_accs.items()):
+            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
+            if idx not in self.layerid2val: 
+                self.layerid2val[idx] = []
+                self.name2layerid[name] = idx
+            self.layerid2val[idx].append(np.mean(acc))
 
-        print('ENSEMBLE', np.median(self.val_accs_ensemble), np.mean(self.val_accs_ensemble), self.val_accs_ensemble[-5:])
+
+        for idx, accs in self.layerid2val.items():
+            print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
+            if len(accs) < 5: continue
+            if idx > 0:
+                #print(self.stable_layer_idx)
+                if np.std(accs[-5:]) < 0.015 and self.layerid2val[idx-1][-1] < accs[-1] and idx  == self.stable_layer_idx + 1:
+                    self.stable_layer_idx = idx
+                    self.layerid2val = {}
+                    print('Increasing stable layer to: ', self.stable_layer_idx)
+                    print(accs)
+                    break
+            elif self.stable_layer_idx == 0:
+                if np.std(accs[-5:]) < 0.015:
+                    self.stable_layer_idx = 1
+                    self.layerid2val = {}
+                    print('Increasing stable layer to: ', self.stable_layer_idx)
+                    print(accs)
+                    break
+
+
+        if len(self.val_accs_ensemble) > 0:
+            print('ENSEMBLE', np.median(self.val_accs_ensemble), np.mean(self.val_accs_ensemble), self.val_accs_ensemble[-5:])
 
 
         self.name2train_accs = {}
@@ -375,7 +407,10 @@ class CorrelationTracker(object):
         #preds_cov = torch.einsum('bfh,f->bf',activation, cov)
         #preds = torch.einsum('bf,fhc->bc',preds_cov, corr)
         #preds = torch.einsum('bfh,fhc->bc',activation, corr)
-        preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
+        if len(corr.shape) == 2:
+            preds = torch.einsum('bh,hc->bc',activation, corr)
+        else:
+            preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
         #cov = torch.mm(corr, corr.T)
         #preds = torch.mm(torch.mm(activation, cov), corr)
         if is_train:
@@ -383,7 +418,7 @@ class CorrelationTracker(object):
         else:
             self.val_votes.append(preds.data.unsqueeze(-1))
 
-        self.ensemble(name)
+        #self.ensemble(name)
 
         val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
         correct = 0
@@ -535,6 +570,26 @@ class CorrelationTracker(object):
                 #module.reset_running_stats()
                 pass
 
+    def forward_ff(self, name, module, inputs, activation):
+        x = activation.data.clone()
+
+        x -= x.mean(0)
+        std = x.std(0)
+        std[std==0] = 1.0
+        x /= std
+        if name in self.name2corr:
+            preds = self.predict(name, x, topk=1, is_train=module.training)
+        if module.training:
+            corr = torch.einsum('bh,bc->hc', x, self.label)/x.shape[0]
+            if name not in self.name2corr:
+                self.name2corr[name] = corr
+            else:
+                m = self.name2corr[name]
+                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
+            corr = self.name2corr[name]
+        else:
+            if name in self.name2corr:
+                corr = self.name2corr[name]
 
     def forward_conv(self, name, module, inputs, activation):
         #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)

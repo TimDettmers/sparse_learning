@@ -40,6 +40,7 @@ models['wrn-28-2'] = (WideResNet, [28, 2, 10, 0.3])
 models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
 models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
 models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
+models['wrn-40-2'] = (WideResNet, [40, 2, 10, 0.3])
 
 def setup_logger(args):
     global logger
@@ -171,6 +172,7 @@ def main():
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
     parser.add_argument('--cluster', action='store_true', help='Clusters the neurons into class groups.')
+    parser.add_argument('--wave', action='store_true', help='Trains with lr-wave.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -231,14 +233,28 @@ def main():
 
         optimizer = None
         if args.optimizer == 'sgd':
-            optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+            grps = []
+
+            for i, p in enumerate(model.parameters()):
+                grps.append({'params' : [p], 'lr' : args.lr})
+
+            if args.wave:
+                optimizer = optim.SGD(grps,lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
+            else:
+                optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
+            #optimizer = optim.SGD(grps,lr=0.0,momentum=0.0,weight_decay=0.0, nesterov=False)
+            print('LR', args.lr)
+            #optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
         elif args.optimizer == 'adam':
             optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
         else:
             print('Unknown optimizer: {0}'.format(args.optimizer))
             raise Exception('Unknown optimizer.')
 
-        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
+        if args.wave:
+            lr_scheduler = None
+        else:
+            lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
 
         if args.resume:
             if os.path.isfile(args.resume):
@@ -280,8 +296,70 @@ def main():
                            verbose=args.verbose, fp16=args.fp16)
             mask.add_module(model, density=args.density)
 
+        switches = [1, 4, 7, 10, 15, 20, 25, 30, 35]
+        idx = [0, 1]
+        lrs = np.array([0.00001, 0.03, 0.1])
+        window_start = 2
+        window_end = 2
+        jump = 2
+        layers = len(optimizer.param_groups)
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
+            if args.wave:
+                for i, grp in enumerate(optimizer.param_groups):
+                    if i in idx:
+                        grp['lr'] = lrs[2]
+                        print(i, grp['lr'])
+                    elif i < idx[0] and i >= idx[0] - window_start:
+                        grp['lr'] = lrs[1]
+                        print(i, grp['lr'])
+                    elif i > idx[1] and i <= idx[1] + window_end:
+                        grp['lr'] = lrs[1]
+                        print(i, grp['lr'])
+                    else:
+                        grp['lr'] = lrs[0]
+
+
+                if (epoch + 1) % 3 == 0:
+                    idx[0] += jump
+                    idx[1] += jump
+                    print(len(tracker.layerid2val))
+                    if idx[1] >= layers:
+                        idx[0] = 0
+                        idx[1] = 1
+
+            #optimizer.param_groups[0] = 0.1
+            #optimizer.param_groups[-1] = 0.1
+            lrs *= 0.90
+            for i, (name, param) in enumerate(model.named_parameters()):
+                pass
+                #name = name.replace('.weight', '')
+                #if name in tracker.name2layerid:
+                #    if tracker.name2layerid[name] == tracker.stable_layer_idx:
+                #print(i, tracker.stable_layer_idx)
+
+                #if i >= tracker.stable_layer_idx*2:# and i < (tracker.stable_layer_idx*2) + 2:
+                #    param.requires_grad = True
+                #    print(name, 'true')
+                #else:
+                #    param.requires_grad = False
+
+                #idx = ((epoch + 1) // 5)*2
+
+                #if i >= idx:
+                #    param.requires_grad = True
+                #    print(name, 'true')
+                #else:
+                #    param.requires_grad = False
+
+                #if i >= l-2:
+                #    param.requires_grad = True
+                #    print(name, 'true')
+
+
+
+
+
             train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, tracker)
 
             if args.valid_split > 0.0:
