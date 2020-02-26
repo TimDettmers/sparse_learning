@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay, LinearDecay
+from sparselearning.core import Masking, CosineDecay, LinearDecay, SelectiveBackpropSampler
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -72,13 +72,41 @@ def print_and_log(msg):
     print(msg)
     logger.info(msg)
 
-def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None):
+def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None, sampler=None):
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
+    sampled_batch = []
+    fetcher = torch.utils.data.dataloader._SingleProcessDataLoaderIter(train_loader)
+    counts = [0,0]
+    for batch_idx, (data, target, idx) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
-        data, target = data.to(device), target.to(device)
+        data, target, idx = data.to(device), target.to(device), idx.to(device)
         if args.fp16: data = data.half()
+        if sampler is not None:
+            with torch.no_grad():
+                #t0 = time.time()
+                output = model(data)
+                #print('model time ', time.time()-t0)
+                loss = F.nll_loss(output, target, reduction='none')
+                #t0 = time.time()
+                sampled_batch += sampler.get_samples(loss, idx)
+                #print('sample time ', time.time()-t0)
+                counts[0] += 1
+
+            if len(sampled_batch) < args.batch_size: continue
+
+            sampled_batch = sampled_batch[:args.batch_size]
+
+            #data, target, idx = train_loader[sampled_batch]
+            data, target, idx = fetcher._dataset_fetcher.fetch(sampled_batch)  # may raise StopIteration
+            sampled_batch = []
+
+            data, target = data.to(device), target.to(device)
+            if args.fp16: data = data.half()
         optimizer.zero_grad()
+        counts[0] += 1
+        counts[1] += 1
+
+
         output = model(data)
 
         loss = F.nll_loss(output, target)
@@ -95,6 +123,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
             print_and_log('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
+    print('COUNTS:')
+    print(counts)
 
 def evaluate(args, model, device, test_loader, is_test_set=False):
     model.eval()
@@ -102,7 +132,7 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
     correct = 0
     n = 0
     with torch.no_grad():
-        for data, target in test_loader:
+        for data, target, index in test_loader:
             data, target = data.to(device), target.to(device)
             if args.fp16: data = data.half()
             model.t = target
@@ -251,6 +281,15 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
+        #from thop import profile
+        #inputs = torch.rand(1, 3, 32, 32).cuda()
+        #from thop import clever_format
+        #macs, params = profile(model, inputs=(inputs,))
+        #macs, params = clever_format([macs, params], "%.3f")
+        #print(macs, params)
+        #sampler = SelectiveBackpropSampler(beta=0.5)
+        sampler = None
+
         mask = None
         if not args.dense:
             if args.decay_schedule == 'cosine':
@@ -263,7 +302,7 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
-            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask)
+            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, sampler)
 
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader)

@@ -11,6 +11,7 @@ import math
 import os
 import shutil
 import time
+import bisect
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
@@ -22,6 +23,59 @@ def add_sparse_args(parser):
     parser.add_argument('--density', type=float, default=0.05, help='The density of the overall sparse network.')
     parser.add_argument('--dense', action='store_true', help='Enable dense mode. Default: False.')
     parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
+
+class SelectiveBackpropSampler(object):
+    def __init__(self, beta, seed=0, max_size=10000):
+        self.beta = beta
+        self.history = []
+        self.history2 = []
+        self.rdm = np.random.RandomState(seed)
+        self.max_size = max_size
+
+
+
+    def get_samples2(self, loss, indices):
+        #indices = indices.to(loss.device)
+        self.history2.append(loss.clone())
+
+        if len(self.history2) > self.max_size:
+            self.history2 = self.history2[-self.max_size:]
+
+        data = torch.cat(self.history2).view(-1, 1).expand(-1, loss.shape[0])
+        percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
+        rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
+
+        #print(rdm.device, percentiles.device)
+        #idx = np.where((rdm < percentiles).cpu().numpy())[0]
+        idx = torch.where(rdm < percentiles)[0]
+
+        idx = indices[idx]
+        selected = idx.cpu().numpy().tolist()
+
+        return selected
+        ##print(idx)
+
+
+    def get_samples(self, loss, indices):
+        selected = []
+        rdms = self.rdm.rand(loss.shape[0])
+        for l, idx, rdm in zip(loss, indices, rdms):
+            bisect.insort(self.history, l.item())
+
+            length = len(self.history)
+            pos = bisect.bisect(self.history, l.item())
+            percentile = pos/length
+            if rdm < percentile:
+                selected.append(idx.item())
+
+        if len(self.history) > self.max_size:
+            self.history = []
+
+        return selected
+
+
+
+
 
 class CosineDecay(object):
     """Decays a pruning rate according to a cosine schedule

@@ -24,6 +24,18 @@ class DatasetSplitter(torch.utils.data.Dataset):
         assert index < len(self),"index out of bounds in split_datset"
         return self.parent_dataset[index + self.split_start]
 
+class IndexDatasetWrapper(torch.utils.data.Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __getitem__(self, index):
+        data, target = self.data[index]
+        return data, target, index
+
+    def __len__(self):
+        return len(self.data)
+
+
 def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
     """Creates augmented train, validation, and test data loaders."""
 
@@ -46,9 +58,8 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
          normalize
     ])
 
-    full_dataset = datasets.CIFAR10('_dataset', True, train_transform, download=True)
-    test_dataset = datasets.CIFAR10('_dataset', False, test_transform, download=False)
-
+    full_dataset = IndexDatasetWrapper(datasets.CIFAR10('_dataset', True, train_transform, download=True))
+    test_dataset = IndexDatasetWrapper(datasets.CIFAR10('_dataset', False, test_transform, download=False))
 
     # we need at least two threads
     max_threads = 2 if max_threads < 2 else max_threads
@@ -68,7 +79,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=train_threads,
+            num_workers=0,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -99,8 +110,8 @@ def get_mnist_dataloaders(args, validation_split=0.0):
     normalize = transforms.Normalize((0.1307,), (0.3081,))
     transform = transform=transforms.Compose([transforms.ToTensor(),normalize])
 
-    full_dataset = datasets.MNIST('../data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('../data', train=False, transform=transform)
+    full_dataset = IndexDatasetWrapper(datasets.MNIST('../data', train=True, download=True, transform=transform))
+    test_dataset = IndexDatasetWrapper(datasets.MNIST('../data', train=False, transform=transform))
 
     dataset_size = len(full_dataset)
     indices = list(range(dataset_size))
@@ -114,7 +125,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=8,
+            num_workers=0,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
