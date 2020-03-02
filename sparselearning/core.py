@@ -64,12 +64,13 @@ class SelectiveBackpropSampler(object):
 
             length = len(self.history)
             pos = bisect.bisect(self.history, l.item())
-            percentile = pos/length
+            percentile = np.power(pos/length, self.beta)
             if rdm < percentile:
                 selected.append(idx.item())
 
         if len(self.history) > self.max_size:
             self.history = []
+            print('freeing history...')
 
         return selected
 

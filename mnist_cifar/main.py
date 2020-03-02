@@ -81,7 +81,7 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         if lr_scheduler is not None: lr_scheduler.step()
         data, target, idx = data.to(device), target.to(device), idx.to(device)
         if args.fp16: data = data.half()
-        if sampler is not None:
+        if sampler is not None and epoch > 2:
             with torch.no_grad():
                 #t0 = time.time()
                 output = model(data)
@@ -188,6 +188,7 @@ def main():
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
+    parser.add_argument('--beta', type=float, default=0.2)
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -287,8 +288,8 @@ def main():
         #macs, params = profile(model, inputs=(inputs,))
         #macs, params = clever_format([macs, params], "%.3f")
         #print(macs, params)
-        #sampler = SelectiveBackpropSampler(beta=0.5)
-        sampler = None
+        sampler = SelectiveBackpropSampler(beta=args.beta, max_size=100000)
+        #sampler = None
 
         mask = None
         if not args.dense:
