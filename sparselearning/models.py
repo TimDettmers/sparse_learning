@@ -372,7 +372,8 @@ class WideResNet(nn.Module):
         # 3rd block
         self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, save_features=save_features, bench=self.bench)
         # global average pooling and classifier
-        self.bn1 = nn.BatchNorm2d(nChannels[3])
+        #self.bn1 = nn.BatchNorm2d(nChannels[3])
+        self.bn1 = lambda x: x
         self.relu = nn.ReLU(inplace=True)
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
@@ -476,8 +477,8 @@ class BasicBlock(nn.Module):
         else:
             out = self.conv2(out)
 
-        #return torch.add(x if self.equalInOut else self.convShortcut(x), out)
-        return out if self.equalInOut else torch.add(out,self.convShortcut(x))
+        return torch.add(x if self.equalInOut else self.convShortcut(x), out)
+        #return out if self.equalInOut else torch.add(out,self.convShortcut(x))
 
 class NetworkBlock(nn.Module):
     """Wide Residual Network network block which holds basic blocks.

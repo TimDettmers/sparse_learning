@@ -104,8 +104,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
     if tracker is not None:
         if args.cluster and (epoch-1) % 1 == 0:
             print('Restructing layers....')
-            #tracker.generate_clusters()
-            tracker.make_generalists_clusters()
+            tracker.generate_clusters()
+            #tracker.make_generalists_clusters()
         #tracker.generate_heatmap('/home/tim/data/plots/corr')
 
 def evaluate(args, model, device, test_loader, is_test_set=False, tracker=None):
@@ -282,7 +282,8 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
-        tracker = CorrelationTracker(num_labels=10, momentum=0.9)
+        #tracker = CorrelationTracker(num_labels=10, momentum=0.9, drop_layers=set(['conv1', 'conv2']))
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=True)
         tracker.build_graph(model)
         tracker.wrap_model(model)
 
@@ -367,9 +368,10 @@ def main():
 
             if tracker is not None:
                 if epoch > 0:
-                    #tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
+                    tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
                     tracker.compute_layer_accuracy()
                     #tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
+                    #tracker.generate_clusters()
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),
