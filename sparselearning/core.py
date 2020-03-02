@@ -31,7 +31,63 @@ class SelectiveBackpropSampler(object):
         self.history2 = []
         self.rdm = np.random.RandomState(seed)
         self.max_size = max_size
+        self.sampled_batch = []
+        self.batch_size = None
+        self.counts = [[0],[0]]
+        self.sampled_x = []
+        self.sampled_y = []
+        self.num_samples = 0
 
+    def forward_backward(self, model, x, y, idx, loss_func, optimizer, epoch=None, fp16=False):
+        self.batch_size = x.shape[0]
+        with torch.no_grad():
+            #t0 = time.time()
+            output = model(x)
+            #print('model time ', time.time()-t0)
+            loss = loss_func(output, y)
+            #t0 = time.time()
+            # TODO: store data
+            sampled_idx = self.get_samples(loss, idx)
+            self.num_samples += sampled_idx.numel()
+            if sampled_idx.numel() > 0:
+                self.sampled_x.append(x.clone().data[sampled_idx])
+                self.sampled_y.append(y.clone().data[sampled_idx])
+            #print('sample time ', time.time()-t0)
+            self.counts[0] += 1
+
+        if self.num_samples < self.batch_size: return
+
+        data = torch.cat(self.sampled_x, 0)
+        target = torch.cat(self.sampled_y, 0)
+        data = data[:self.batch_size]
+        target = target[:self.batch_size]
+
+        # free variables and data
+        self.num_samples = 0
+        del self.sampled_x[:]
+        del self.sampled_y[:]
+        self.sampled_x = []
+        self.sampled_y = []
+
+        print(data.shape, target.shape)
+        if len(self.sampled_batch) < self.batch_size: continue
+
+        optimizer.zero_grad()
+
+        self.counts[0] += 1
+        self.counts[1] += 1
+
+        output = model(data)
+
+        loss = loss_func(output, target)
+        loss = loss.mean()
+
+        if args.fp16:
+            optimizer.backward(loss)
+        else:
+            loss.backward()
+
+        optimizer.step()
 
 
     def get_samples2(self, loss, indices):

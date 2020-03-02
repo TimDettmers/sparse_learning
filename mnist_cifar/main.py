@@ -81,43 +81,44 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         if lr_scheduler is not None: lr_scheduler.step()
         data, target, idx = data.to(device), target.to(device), idx.to(device)
         if args.fp16: data = data.half()
-        if sampler is not None and epoch > 2:
-            with torch.no_grad():
-                #t0 = time.time()
-                output = model(data)
-                #print('model time ', time.time()-t0)
-                loss = F.nll_loss(output, target, reduction='none')
-                #t0 = time.time()
-                sampled_batch += sampler.get_samples(loss, idx)
-                #print('sample time ', time.time()-t0)
-                counts[0] += 1
+        sampler.forward_backward(data, target, idx, lambda x,y: F.nll_loss(x, y, reduction='none'), optimizer, epoch=epoch, fp16=fp16)
+        #if sampler is not None and epoch > 2:
+        #    with torch.no_grad():
+        #        #t0 = time.time()
+        #        output = model(data)
+        #        #print('model time ', time.time()-t0)
+        #        loss = F.nll_loss(output, target, reduction='none')
+        #        #t0 = time.time()
+        #        sampled_batch += sampler.get_samples(loss, idx)
+        #        #print('sample time ', time.time()-t0)
+        #        counts[0] += 1
 
-            if len(sampled_batch) < args.batch_size: continue
+        #    if len(sampled_batch) < args.batch_size: continue
 
-            sampled_batch = sampled_batch[:args.batch_size]
+        #    sampled_batch = sampled_batch[:args.batch_size]
 
-            #data, target, idx = train_loader[sampled_batch]
-            data, target, idx = fetcher._dataset_fetcher.fetch(sampled_batch)  # may raise StopIteration
-            sampled_batch = []
+        #    #data, target, idx = train_loader[sampled_batch]
+        #    data, target, idx = fetcher._dataset_fetcher.fetch(sampled_batch)  # may raise StopIteration
+        #    sampled_batch = []
 
-            data, target = data.to(device), target.to(device)
-            if args.fp16: data = data.half()
-        optimizer.zero_grad()
-        counts[0] += 1
-        counts[1] += 1
+        #    data, target = data.to(device), target.to(device)
+        #    if args.fp16: data = data.half()
+        #optimizer.zero_grad()
+        #counts[0] += 1
+        #counts[1] += 1
 
 
-        output = model(data)
+        #output = model(data)
 
-        loss = F.nll_loss(output, target)
+        #loss = F.nll_loss(output, target)
 
-        if args.fp16:
-            optimizer.backward(loss)
-        else:
-            loss.backward()
+        #if args.fp16:
+        #    optimizer.backward(loss)
+        #else:
+        #    loss.backward()
 
-        if mask is not None: mask.step()
-        else: optimizer.step()
+        #if mask is not None: mask.step()
+        #else: optimizer.step()
 
         if batch_idx % args.log_interval == 0:
             print_and_log('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
