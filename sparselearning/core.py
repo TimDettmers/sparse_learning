@@ -38,8 +38,59 @@ def add_sparse_args(parser):
     parser.add_argument('--dense', action='store_true', help='Enable dense mode. Default: False.')
     parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
 
+class AbstractLossEngine(object):
+    def __init__(self):
+        self.num_samples = 0
+
+    def loss_func(self, inputs):
+        raise NotImplementedError('Implement loss function!')
+
+    def select_func(self, inputs, idx):
+        raise NotImplementedError('Implement select function!')
+
+    def make_batch(self):
+        raise NotImplementedError('Implement make batch function!')
+
+class CVLossEngine(AbstractLossEngine):
+    def __init__(self, model):
+        super(CVLossEngine, self).__init__()
+        self.model = model
+        self.x = []
+        self.y = []
+
+    def loss_func(self, inputs):
+        with torch.no_grad():
+            x, y = inputs
+            output = self.model(x)
+            loss = F.nll_loss(output, y, reduction='none')
+        return loss
+
+
+    def select_func(self, inputs, idx):
+        x, y = inputs
+        self.num_samples += idx.shape[0]
+        self.x.append(x.data[idx].clone())
+        self.y.append(y.data[idx].clone())
+
+    def make_batch(self, batch_size):
+        data = torch.cat(self.x, 0)
+        target = torch.cat(self.y, 0)
+        data = data[:batch_size]
+        target = target[:batch_size]
+
+        # cleanup
+        self.num_samples = 0
+        del self.x[:]
+        del self.y[:]
+        self.x = []
+        self.y = []
+
+        return [data, target]
+
+
+
 class SelectiveBackpropSampler(object):
-    def __init__(self, beta, seed=0, max_size=1000):
+    def __init__(self, loss_engine, beta, seed=0, max_size=1000):
         self.beta = beta
         self.history = []
         self.history2 = []
@@ -48,44 +99,21 @@ class SelectiveBackpropSampler(object):
         self.sampled_batch = []
         self.batch_size = None
         self.counts = [0,0]
-        self.sampled_x = []
-        self.sampled_y = []
+        self.sampled_data = {}
         self.num_samples = 0
         self.t = CUDATimer()
+        self.engine = loss_engine
 
-    def generate_sample(self, model, x, y, idx, loss_func):
-        self.batch_size = x.shape[0]
-        with torch.no_grad():
-            #t0 = time.time()
+    def generate_sample(self, inputs, idx):
+        self.batch_size = inputs[0].shape[0]
+        loss = self.engine.loss_func(inputs)
+        sampled_idx = self.histogram_sample(loss, idx)
+        self.num_samples += sampled_idx.numel()
+        if sampled_idx.numel() > 0:
+            self.engine.select_func(inputs, sampled_idx)
+        self.counts[0] += 1
 
-            #self.t.tick()
-            output = model(x)
-            #print('model time ', time.time()-t0)
-            loss = loss_func(output, y)
-            #print('forward ', self.t.tock())
-            #t0 = time.time()
-            # TODO: store data
-            #self.t.tick()
-            sampled_idx = self.histogram_sample(loss, idx)
-            self.num_samples += sampled_idx.numel()
-            if sampled_idx.numel() > 0:
-                self.sampled_x.append(x.clone().data[sampled_idx])
-                self.sampled_y.append(y.clone().data[sampled_idx])
-            self.counts[0] += 1
-            #print('sample ', self.t.tock())
-
-        if self.num_samples < self.batch_size: return None, None
-
-        data = torch.cat(self.sampled_x, 0)
-        target = torch.cat(self.sampled_y, 0)
-        data = data[:self.batch_size]
-        target = target[:self.batch_size]
-
-        self.num_samples = 0
-        del self.sampled_x[:]
-        del self.sampled_y[:]
-        self.sampled_x = []
-        self.sampled_y = []
+        if self.engine.num_samples < self.batch_size: return None
 
         self.counts[0] += 1
         self.counts[1] += 1
@@ -93,7 +121,7 @@ class SelectiveBackpropSampler(object):
         if self.counts[1] % 100 == 0:
             print('#Forward: {0}; #Backward: {1} Selectivity: {2:.4f}'.format(self.counts[0], self.counts[1], self.counts[1]/self.counts[0]))
 
-        return data, target
+        return self.engine.make_batch(self.batch_size)
 
 
     def histogram_sample(self, loss, indices):

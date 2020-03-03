@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay, LinearDecay, SelectiveBackpropSampler
+from sparselearning.core import Masking, CosineDecay, LinearDecay, SelectiveBackpropSampler, CVLossEngine
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -80,8 +80,9 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         data, target, idx = data.to(device), target.to(device), idx.to(device)
         if args.fp16: data = data.half()
         if sampler is not None:
-            data, target = sampler.generate_sample(model, data, target, idx, lambda x,y: F.nll_loss(x, y, reduction='none'))
-        if data is None: continue
+            outputs = sampler.generate_sample([data, target], idx)
+            if outputs is None: continue
+            else: data, target = outputs
 
         optimizer.zero_grad()
         output = model(data)
@@ -263,7 +264,15 @@ def main():
         #macs, params = profile(model, inputs=(inputs,))
         #macs, params = clever_format([macs, params], "%.3f")
         #print(macs, params)
-        sampler = SelectiveBackpropSampler(beta=args.beta, max_size=1000)
+        def loss_func(inputs):
+            x, y = inputs
+            output = model(x)
+            loss = F.nll_loss(output, y, reduction='none')
+            return loss
+
+
+        engine = CVLossEngine(model)
+        sampler = SelectiveBackpropSampler(engine, beta=args.beta, max_size=1000)
         #sampler = None
 
         mask = None
