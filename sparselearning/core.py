@@ -15,6 +15,20 @@ import bisect
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
 
+class CUDATimer(object):
+    def __init__(self):
+        self.start = torch.cuda.Event(enable_timing=True)
+        self.end = torch.cuda.Event(enable_timing=True)
+
+    def tick(self):
+        self.start.record()
+
+    def tock(self):
+        self.end.record()
+        self.start.synchronize()
+        self.end.synchronize()
+        return self.start.elapsed_time(self.end)/1000.0
+
 def add_sparse_args(parser):
     parser.add_argument('--growth', type=str, default='momentum', help='Growth mode. Choose from: momentum, random, and momentum_neuron.')
     parser.add_argument('--prune', type=str, default='magnitude', help='Prune mode / pruning mode. Choose from: magnitude, SET.')
@@ -25,7 +39,7 @@ def add_sparse_args(parser):
     parser.add_argument('--verbose', action='store_true', help='Prints verbose status of pruning/growth algorithms.')
 
 class SelectiveBackpropSampler(object):
-    def __init__(self, beta, seed=0, max_size=10000):
+    def __init__(self, beta, seed=0, max_size=1000):
         self.beta = beta
         self.history = []
         self.history2 = []
@@ -33,64 +47,56 @@ class SelectiveBackpropSampler(object):
         self.max_size = max_size
         self.sampled_batch = []
         self.batch_size = None
-        self.counts = [[0],[0]]
+        self.counts = [0,0]
         self.sampled_x = []
         self.sampled_y = []
         self.num_samples = 0
+        self.t = CUDATimer()
 
-    def forward_backward(self, model, x, y, idx, loss_func, optimizer, epoch=None, fp16=False):
+    def generate_sample(self, model, x, y, idx, loss_func):
         self.batch_size = x.shape[0]
         with torch.no_grad():
             #t0 = time.time()
+
+            #self.t.tick()
             output = model(x)
             #print('model time ', time.time()-t0)
             loss = loss_func(output, y)
+            #print('forward ', self.t.tock())
             #t0 = time.time()
             # TODO: store data
-            sampled_idx = self.get_samples(loss, idx)
+            #self.t.tick()
+            sampled_idx = self.histogram_sample(loss, idx)
             self.num_samples += sampled_idx.numel()
             if sampled_idx.numel() > 0:
                 self.sampled_x.append(x.clone().data[sampled_idx])
                 self.sampled_y.append(y.clone().data[sampled_idx])
-            #print('sample time ', time.time()-t0)
             self.counts[0] += 1
+            #print('sample ', self.t.tock())
 
-        if self.num_samples < self.batch_size: return
+        if self.num_samples < self.batch_size: return None, None
 
         data = torch.cat(self.sampled_x, 0)
         target = torch.cat(self.sampled_y, 0)
         data = data[:self.batch_size]
         target = target[:self.batch_size]
 
-        # free variables and data
         self.num_samples = 0
         del self.sampled_x[:]
         del self.sampled_y[:]
         self.sampled_x = []
         self.sampled_y = []
 
-        print(data.shape, target.shape)
-        if len(self.sampled_batch) < self.batch_size: continue
-
-        optimizer.zero_grad()
-
         self.counts[0] += 1
         self.counts[1] += 1
 
-        output = model(data)
+        if self.counts[1] % 100 == 0:
+            print('#Forward: {0}; #Backward: {1} Selectivity: {2:.4f}'.format(self.counts[0], self.counts[1], self.counts[1]/self.counts[0]))
 
-        loss = loss_func(output, target)
-        loss = loss.mean()
-
-        if args.fp16:
-            optimizer.backward(loss)
-        else:
-            loss.backward()
-
-        optimizer.step()
+        return data, target
 
 
-    def get_samples2(self, loss, indices):
+    def histogram_sample(self, loss, indices):
         #indices = indices.to(loss.device)
         self.history2.append(loss.clone())
 
@@ -105,14 +111,16 @@ class SelectiveBackpropSampler(object):
         #idx = np.where((rdm < percentiles).cpu().numpy())[0]
         idx = torch.where(rdm < percentiles)[0]
 
-        idx = indices[idx]
-        selected = idx.cpu().numpy().tolist()
+        #print(idx)
+        #idx = indices[idx]
+        #print(idx)
+        #selected = idx.cpu().numpy().tolist()
 
-        return selected
+        return idx
         ##print(idx)
 
 
-    def get_samples(self, loss, indices):
+    def get_samples2(self, loss, indices):
         selected = []
         rdms = self.rdm.rand(loss.shape[0])
         for l, idx, rdm in zip(loss, indices, rdms):

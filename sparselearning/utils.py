@@ -79,7 +79,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=0,
+            num_workers=train_threads,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -125,7 +125,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=0,
+            num_workers=train_threads,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,
