@@ -87,6 +87,57 @@ class CVLossEngine(AbstractLossEngine):
 
         return [data, target]
 
+class FairseqLossEngine(AbstractLossEngine):
+    def __init__(self, model, criterion):
+        super(FairseqLossEngine, self).__init__()
+        self.sampled_data = {}
+        self.model = model
+        self.criterion = criterion
+
+    def loss_func(self, inputs):
+        n = inputs['nsentences']
+        with torch.no_grad():
+            loss, sample_size, logging_output = self.criterion(self.model, inputs, reduce=False)
+        return loss.reshape(n, -1).sum(1)
+
+
+    def select_func(self, inputs, idx):
+        n = idx.shape[0]
+        for key, value in inputs.items():
+            if isinstance(value, int):
+                self.sampled_data[key] = value
+                continue
+            elif isinstance(value, dict):
+                if key not in self.sampled_data: self.sampled_data[key] = {}
+                for key2, value2 in value.items():
+                    if key2 not in self.sampled_data[key]: self.sampled_data[key][key2] = []
+                    self.sampled_data[key][key2].append(value2.data[idx].clone())
+            else:
+                if key not in self.sampled_data: self.sampled_data[key] = []
+                self.sampled_data[key].append(value.data[idx].clone())
+        self.num_samples += n
+
+    def make_batch(self, batch_size):
+        data = {}
+        for key, values in self.sampled_data.items():
+            if isinstance(values, int): data[key] = values
+            elif isinstance(values, dict):
+                data[key] = {}
+                for key2, values2 in values.items():
+                    value2 = torch.cat(values2, 0)
+                    value2 = value2[:batch_size]
+                    data[key][key2] = value2
+            else:
+                value = torch.cat(values, 0)
+                value = value[:batch_size]
+                data[key] = value
+
+        # cleanup
+        self.num_samples = 0
+        del self.sampled_data
+        self.sampled_data = {}
+
+        return data
 
 
 class SelectiveBackpropSampler(object):
@@ -104,11 +155,10 @@ class SelectiveBackpropSampler(object):
         self.t = CUDATimer()
         self.engine = loss_engine
 
-    def generate_sample(self, inputs, idx):
-        self.batch_size = inputs[0].shape[0]
+    def generate_sample(self, inputs, idx, batch_size):
+        self.batch_size = batch_size
         loss = self.engine.loss_func(inputs)
         sampled_idx = self.histogram_sample(loss, idx)
-        self.num_samples += sampled_idx.numel()
         if sampled_idx.numel() > 0:
             self.engine.select_func(inputs, sampled_idx)
         self.counts[0] += 1
@@ -125,7 +175,6 @@ class SelectiveBackpropSampler(object):
 
 
     def histogram_sample(self, loss, indices):
-        #indices = indices.to(loss.device)
         self.history2.append(loss.clone())
 
         if len(self.history2) > self.max_size:
@@ -140,7 +189,6 @@ class SelectiveBackpropSampler(object):
         idx = torch.where(rdm < percentiles)[0]
 
         #print(idx)
-        #idx = indices[idx]
         #print(idx)
         #selected = idx.cpu().numpy().tolist()
 
