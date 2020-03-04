@@ -14,6 +14,9 @@ import time
 import bisect
 from matplotlib import pyplot as plt
 from sparselearning.funcs import redistribution_funcs, growth_funcs, prune_funcs
+from functools import reduce
+
+torch.set_printoptions(sci_mode=False)
 
 class CUDATimer(object):
     def __init__(self):
@@ -93,15 +96,72 @@ class FairseqLossEngine(AbstractLossEngine):
         self.sampled_data = {}
         self.model = model
         self.criterion = criterion
+        self.bin_data = None
+        self.bin_range = None
+        self.iter = 0
+        self.word2losshistory = {}
+        self.n = 0
+        self.freqtbl = torch.ones(1000000, dtype=torch.float32, device='cuda')
+        self.warmup = 0
 
     def loss_func(self, inputs):
         n = inputs['nsentences']
         with torch.no_grad():
             loss, sample_size, logging_output = self.criterion(self.model, inputs, reduce=False)
-        return loss.reshape(n, -1).sum(1)
+
+        tokens = inputs['net_input']['src_tokens']
+        idx, counts = torch.unique(tokens, return_counts=True)
+        self.freqtbl[idx] += counts
+        self.n += counts.sum().item()
+
+        #for l, idx in zip(loss.reshape(n, -1), inputs['net_input']['src_tokens']):
+        #    for word_loss, word_idx in zip(l, idx):
+        #        if word_idx.item() not in self.word2losshistory: self.word2losshistory[word_idx.item()] = []
+        #        self.word2losshistory[word_idx.item()].append(word_loss.item())
+        #    counts = torch.histc(l, 25, 5, 15)
+        #    self.iter += 1
+        #    if self.bin_data is None:
+        #        self.bin_data = counts
+        #        self.bin_range = torch.arange(5, 15, (15-5)/25)
+        #    else:
+        #        self.bin_data += counts
+
+        #    if self.iter > 0 and self.iter % 500 == 0:
+        #        print('='*80)
+        #        print(self.iter)
+        #        print(self.bin_data)
+        #        print(self.bin_range)
+        #        max_val = 0
+        #        #for key, values in self.word2losshistory.items():
+        #        #    local_max = reduce(max, values)
+        #        #    max_val = max(max_val, local_max)
+        #        #    if local_max > max_val*0.75 and len(values) > 2:
+        #        #        print(max_val, key, values)
+
+        #        self.bin_data = None
+        #        self.bin_range = None
+        #        self.word2losshistory = {}
+
+        rescaled_loss = loss.data.clone()
+        #print(loss.data.reshape(n, -1)[0])
+        #rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
+        #print(rescaled_loss.data.reshape(n, -1)[0])
+
+
+        # get 90th percentile
+        #k = int(loss.reshape(n, -1).shape[1]*0.9)
+        #return torch.kthvalue(rescaled_loss.reshape(n, -1), k=k, dim=1)[0]
+
+        return rescaled_loss.reshape(n, -1).max(1)[0]
+
+        #return rescaled_loss.reshape(n, -1).sum(1)
 
 
     def select_func(self, inputs, idx):
+        self.iter += 1
+        if self.iter < self.warmup:
+            idx = torch.arange(inputs['nsentences'],device=idx.device)
+
         n = idx.shape[0]
         for key, value in inputs.items():
             if isinstance(value, int):
@@ -175,17 +235,19 @@ class SelectiveBackpropSampler(object):
 
 
     def histogram_sample(self, loss, indices):
-        self.history2.append(loss.clone())
-
         if len(self.history2) > self.max_size:
-            self.history2 = self.history2[-self.max_size:]
+            #self.history2 = self.history2[-self.max_size:]
+            del self.history2[:]
+            self.history2 = []
+
+
+        self.history2.append(loss.clone())
 
         data = torch.cat(self.history2).view(-1, 1).expand(-1, loss.shape[0])
         percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
         rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
 
         #print(rdm.device, percentiles.device)
-        #idx = np.where((rdm < percentiles).cpu().numpy())[0]
         idx = torch.where(rdm < percentiles)[0]
 
         #print(idx)
