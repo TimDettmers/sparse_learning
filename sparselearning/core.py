@@ -201,7 +201,7 @@ class FairseqLossEngine(AbstractLossEngine):
 
 
 class SelectiveBackpropSampler(object):
-    def __init__(self, loss_engine, beta, seed=0, max_size=1000):
+    def __init__(self, loss_engine, beta, seed=0, max_size=1000, epsilon=0.5, decay=0.999):
         self.beta = beta
         self.history = []
         self.history2 = []
@@ -214,6 +214,9 @@ class SelectiveBackpropSampler(object):
         self.num_samples = 0
         self.t = CUDATimer()
         self.engine = loss_engine
+        self.epsilon = epsilon
+        self.decay = decay
+        self.iter = 0
 
     def generate_sample(self, inputs, idx, batch_size):
         self.batch_size = batch_size
@@ -228,13 +231,17 @@ class SelectiveBackpropSampler(object):
         self.counts[0] += 1
         self.counts[1] += 1
 
+        self.epsilon *= self.decay
+
         if self.counts[1] % 100 == 0:
             print('#Forward: {0}; #Backward: {1} Selectivity: {2:.4f}'.format(self.counts[0], self.counts[1], self.counts[1]/self.counts[0]))
+            print('Epsilon: {0:.4f}'.format(self.epsilon))
 
         return self.engine.make_batch(self.batch_size)
 
 
     def histogram_sample(self, loss, indices):
+        if self.rdm.rand(1) < self.epsilon: return torch.arange(0, loss.shape[0], device=loss.device)
         if len(self.history2) > self.max_size:
             #self.history2 = self.history2[-self.max_size:]
             del self.history2[:]
@@ -244,11 +251,12 @@ class SelectiveBackpropSampler(object):
         self.history2.append(loss.clone())
 
         data = torch.cat(self.history2).view(-1, 1).expand(-1, loss.shape[0])
-        percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
-        rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
+        #percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
+        #rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
+        percentiles = (loss > data).sum(0).float()/data.shape[0]
 
         #print(rdm.device, percentiles.device)
-        idx = torch.where(rdm < percentiles)[0]
+        idx = torch.where(percentiles > (1.0 - self.beta))[0]
 
         #print(idx)
         #print(idx)

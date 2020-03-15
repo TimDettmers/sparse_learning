@@ -125,7 +125,7 @@ def get_mnist_dataloaders(args, validation_split=0.0):
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
-            num_workers=train_threads,
+            num_workers=args.max_threads,
             pin_memory=True, shuffle=True)
         valid_loader = torch.utils.data.DataLoader(
             val_dataset,

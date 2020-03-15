@@ -80,7 +80,7 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         data, target, idx = data.to(device), target.to(device), idx.to(device)
         if args.fp16: data = data.half()
         if sampler is not None:
-            outputs = sampler.generate_sample([data, target], idx)
+            outputs = sampler.generate_sample([data, target], idx, args.batch_size)
             if outputs is None: continue
             else: data, target = outputs
 
