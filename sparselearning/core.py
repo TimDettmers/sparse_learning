@@ -103,6 +103,7 @@ class FairseqLossEngine(AbstractLossEngine):
         self.n = 0
         self.freqtbl = torch.ones(1000000, dtype=torch.float32, device='cuda')
         self.warmup = 0
+        self.n_looked_at = 0
 
     def loss_func(self, inputs):
         n = inputs['nsentences']
@@ -152,9 +153,9 @@ class FairseqLossEngine(AbstractLossEngine):
         #k = int(loss.reshape(n, -1).shape[1]*0.9)
         #return torch.kthvalue(rescaled_loss.reshape(n, -1), k=k, dim=1)[0]
 
-        return rescaled_loss.reshape(n, -1).max(1)[0]
+        #return rescaled_loss.reshape(n, -1).max(1)[0]
 
-        #return rescaled_loss.reshape(n, -1).sum(1)
+        return rescaled_loss.reshape(n, -1).sum(1)
 
 
     def select_func(self, inputs, idx):
@@ -176,26 +177,39 @@ class FairseqLossEngine(AbstractLossEngine):
                 if key not in self.sampled_data: self.sampled_data[key] = []
                 self.sampled_data[key].append(value.data[idx].clone())
         self.num_samples += n
+        self.n_looked_at += inputs['nsentences']
 
     def make_batch(self, batch_size):
         data = {}
+        leftovers = {}
+        leftover_size = 0
         for key, values in self.sampled_data.items():
-            if isinstance(values, int): data[key] = values
+            if isinstance(values, int):
+                data[key] = values
             elif isinstance(values, dict):
                 data[key] = {}
+                leftovers[key] = {}
                 for key2, values2 in values.items():
                     value2 = torch.cat(values2, 0)
-                    value2 = value2[:batch_size]
+                    if value2.shape[0] > batch_size:
+                        leftovers[key][key2] = [value2[batch_size:]]
+                        value2 = value2[:batch_size]
                     data[key][key2] = value2
             else:
                 value = torch.cat(values, 0)
-                value = value[:batch_size]
+                if value.shape[0] > batch_size:
+                    leftovers[key] = [value[batch_size:]]
+                    leftover_size = value.shape[0] - batch_size
+                    value = value[:batch_size]
                 data[key] = value
 
         # cleanup
-        self.num_samples = 0
+        self.num_samples = leftover_size
+        self.n_looked_at = leftover_size
+        leftovers['nsentences'] = leftover_size
+        leftovers['ntokens'] = self.sampled_data['ntokens']
         del self.sampled_data
-        self.sampled_data = {}
+        self.sampled_data = leftovers
 
         return data
 
@@ -217,6 +231,7 @@ class SelectiveBackpropSampler(object):
         self.epsilon = epsilon
         self.decay = decay
         self.iter = 0
+        self.clean_interval = 50
 
     def generate_sample(self, inputs, idx, batch_size):
         self.batch_size = batch_size
@@ -228,10 +243,11 @@ class SelectiveBackpropSampler(object):
 
         if self.engine.num_samples < self.batch_size: return None
 
-        self.counts[0] += 1
+
         self.counts[1] += 1
 
         self.epsilon *= self.decay
+        self.iter += 1
 
         if self.counts[1] % 100 == 0:
             print('#Forward: {0}; #Backward: {1} Selectivity: {2:.4f}'.format(self.counts[0], self.counts[1], self.counts[1]/self.counts[0]))
@@ -247,16 +263,38 @@ class SelectiveBackpropSampler(object):
             del self.history2[:]
             self.history2 = []
 
+        if self.iter % self.clean_interval and self.iter > 0:
+            upper = loss.mean() + (loss.std()*3)
+            lower = loss.mean() - (loss.std()*3)
+
+            i = 0
+            #print('pre', loss.mean(), torch.cat(self.history2).mean())
+            while i < len(self.history2):
+                m = self.history2[i].mean()
+                if m < lower or m > upper:
+                    self.history2.pop(i)
+                else:
+                    i += 1
+            #print('post', loss.mean(), torch.cat(self.history2).mean())
 
         self.history2.append(loss.clone())
 
         data = torch.cat(self.history2).view(-1, 1).expand(-1, loss.shape[0])
+        m1 = loss.mean()
+        m2 = data.mean()
+        data = data - (m2-m1)
         #percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
         #rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
         percentiles = (loss > data).sum(0).float()/data.shape[0]
 
+
         #print(rdm.device, percentiles.device)
+        #print(1.0-self.beta)
+        #print(percentiles.mean().item())
         idx = torch.where(percentiles > (1.0 - self.beta))[0]
+
+
+        #print(idx.numel()/ loss.numel(), self.beta)
 
         #print(idx)
         #print(idx)
