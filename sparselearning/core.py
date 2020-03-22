@@ -91,7 +91,7 @@ class CVLossEngine(AbstractLossEngine):
         return [data, target]
 
 class FairseqLossEngine(AbstractLossEngine):
-    def __init__(self, model, criterion):
+    def __init__(self, model, criterion, method='sum'):
         super(FairseqLossEngine, self).__init__()
         self.sampled_data = {}
         self.model = model
@@ -104,6 +104,7 @@ class FairseqLossEngine(AbstractLossEngine):
         self.freqtbl = torch.ones(1000000, dtype=torch.float32, device='cuda')
         self.warmup = 0
         self.n_looked_at = 0
+        self.method = method
 
     def loss_func(self, inputs):
         n = inputs['nsentences']
@@ -144,18 +145,36 @@ class FairseqLossEngine(AbstractLossEngine):
         #        self.word2losshistory = {}
 
         rescaled_loss = loss.data.clone()
-        #print(loss.data.reshape(n, -1)[0])
-        #rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
-        #print(rescaled_loss.data.reshape(n, -1)[0])
+        if self.method == 'sum':
+            return rescaled_loss.reshape(n, -1).sum(1)
+        elif self.method == 'max':
+            return rescaled_loss.reshape(n, -1).max(1)[0]
+        elif self.method == 'rescaled_sum':
+            rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
+            return rescaled_loss.reshape(n, -1).sum(1)
+        elif self.method == 'inverse_rescaled_sum':
+            rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
+            return rescaled_loss.reshape(n, -1).sum(1)
+        elif self.method == 'rescaled_max':
+            rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
+            return rescaled_loss.reshape(n, -1).max(1)[0]
+        elif self.method == 'inverse_rescaled_max':
+            rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
+            return rescaled_loss.reshape(n, -1).max(1)[0]
+        elif self.method == 'percentile':
+            #print(rescaled_loss.data.reshape(n, -1)[0])
+            k = int(loss.reshape(n, -1).shape[1]*0.9)
+            return torch.kthvalue(rescaled_loss.reshape(n, -1), k=k, dim=1)[0]
+        elif self.method == 'topk_sum':
+            k = int(loss.reshape(n, -1).shape[1]*0.1)
+            maxval, maxidx = torch.topk(rescaled_loss.reshape(n, -1), k=k, dim=0)
+            return maxval.sum(1)
 
 
         # get 90th percentile
-        #k = int(loss.reshape(n, -1).shape[1]*0.9)
-        #return torch.kthvalue(rescaled_loss.reshape(n, -1), k=k, dim=1)[0]
 
         #return rescaled_loss.reshape(n, -1).max(1)[0]
 
-        return rescaled_loss.reshape(n, -1).sum(1)
 
 
     def select_func(self, inputs, idx):
