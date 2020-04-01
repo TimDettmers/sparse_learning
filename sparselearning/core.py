@@ -294,11 +294,11 @@ class CorrelationTracker(object):
         print('TRAIN:')
         print('='*80)
         for name, acc in self.name2train_accs.items():
-            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
+            print('{0:30} {1:.3f}'.format(name, np.mean(acc)))
         print('VALID:')
         print('='*80)
         for idx, (name, acc) in enumerate(self.name2val_accs.items()):
-            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
+            print('{0:30} {1:.3f}'.format(name, np.mean(acc)))
             if idx not in self.layerid2val: 
                 self.layerid2val[idx] = []
                 self.name2layerid[name] = idx
@@ -306,7 +306,7 @@ class CorrelationTracker(object):
 
 
         for idx, accs in self.layerid2val.items():
-            print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
+            print('{0} {1:.4f} acc {2:.3f}'.format(idx, np.std(accs[-5:]), accs[-1]))
             if len(accs) < 5: continue
             if idx > 0:
                 #print(self.stable_layer_idx)
@@ -552,10 +552,10 @@ class CorrelationTracker(object):
         if self.prev_idx is not None:
             if module.weight.data.shape[1] == self.prev_idx.shape[0]:
                 module.weight.data = module.weight.data[:, self.prev_idx]
-        #if len(self.name2clusters) == 0:
-        #    print('end', name)
-        #    self.prev_idx = None
-        #    return
+        if len(self.name2clusters) == 0:
+            print('end', name)
+            self.prev_idx = None
+            return
         n = clusters.numel()
         idx_map = []
         val = torch.unique(clusters)
@@ -579,30 +579,30 @@ class CorrelationTracker(object):
             if name in self.name2clusters:
                 self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
 
-            if self.prev_idx is not None:
-                print(name, 'fixup')
-                if isinstance(module, nn.BatchNorm2d):
-                    if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
-                    if module.weight.shape[0] == self.prev_idx.shape[0]:
-                        module.weight.data = module.weight.data[self.prev_idx]
-                        module.bias.data = module.bias.data[self.prev_idx]
-                        module.running_mean.data = module.running_mean.data[self.prev_idx]
-                        module.running_var.data = module.running_var.data[self.prev_idx]
-                        #self.prev_idx = None
-                        #module.reset_running_stats()
-                elif isinstance(module, nn.Linear):
-                    #if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'linear')
-                    if len(self.name2clusters) == 0:
-                        print(self.prev_idx.shape, module.weight.data.shape, inputs[0].shape, inputs[0].stride())
-                        w = module.weight.data
-                        s1 = w.shape[1]
-                        module.weight.data = (module.weight.data.view(w.shape[0], self.prev_idx.shape[0], -1)[:, self.prev_idx]).view(w.shape)
-                        #module.weight.data = module.weight.data[:, self.prev_idx]
-                        #module.bias.data = module.bias.data[self.prev_idx]
-                        self.prev_idx = None
-                elif isinstance(module, nn.BatchNorm1d):
-                    #module.reset_running_stats()
-                    pass
+            #if self.prev_idx is not None:
+            #    print(name, 'fixup')
+            #    if isinstance(module, nn.BatchNorm2d):
+            #        if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
+            #        if module.weight.shape[0] == self.prev_idx.shape[0]:
+            #            module.weight.data = module.weight.data[self.prev_idx]
+            #            module.bias.data = module.bias.data[self.prev_idx]
+            #            module.running_mean.data = module.running_mean.data[self.prev_idx]
+            #            module.running_var.data = module.running_var.data[self.prev_idx]
+            #            #self.prev_idx = None
+            #            #module.reset_running_stats()
+            #    elif isinstance(module, nn.Linear):
+            #        #if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'linear')
+            #        if len(self.name2clusters) == 0:
+            #            print(self.prev_idx.shape, module.weight.data.shape, inputs[0].shape, inputs[0].stride())
+            #            w = module.weight.data
+            #            s1 = w.shape[1]
+            #            module.weight.data = (module.weight.data.view(w.shape[0], self.prev_idx.shape[0], -1)[:, self.prev_idx]).view(w.shape)
+            #            #module.weight.data = module.weight.data[:, self.prev_idx]
+            #            #module.bias.data = module.bias.data[self.prev_idx]
+            #            self.prev_idx = None
+            #    elif isinstance(module, nn.BatchNorm1d):
+            #        #module.reset_running_stats()
+            #        pass
         else:
             if name in self.name2clusters:
                 self.name2prev_clusters[name] = self.name2clusters[name]
@@ -627,8 +627,8 @@ class CorrelationTracker(object):
         else:
             if name in self.name2corr:
                 corr = self.name2corr[name]
-                #self.cluster_drop(name, activation)
-                #self.all_class_correlation_pruning(corr, x, activation, 0.9)
+                self.cluster_drop(name, activation)
+        self.all_class_correlation_pruning(name, corr, x, activation, 0.7)
 
     def forward_conv(self, name, module, inputs, activation):
         #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)
@@ -688,7 +688,7 @@ class CorrelationTracker(object):
         #names = set(names[-3:])
         #if name not in names: return
         k = 2
-        print('Dropping for layer: {0}'.format(name))
+        #print('Dropping for layer: {0}'.format(name))
         if name in self.name2prev_clusters:
             #print('DROPPING {1} CLUSTERS FOR LAYER {0}'.format(name, k))
             clusters = self.name2prev_clusters[name]
@@ -696,7 +696,9 @@ class CorrelationTracker(object):
                 idx = clusters == self.num_labels-(1+i)
                 activation[:, idx] = 0.0
 
-    def all_class_correlation_pruning(self, corr, x, activation, fraction):
+    def all_class_correlation_pruning(self, name, corr, x, activation, fraction):
+        if len(self.drop_layers) > 0:
+            if not any([name2 in name for name2 in self.drop_layers]): return
         #preds = torch.mm(torch.mm(x, torch.mm(corr, corr.T)), corr)
         #preds = torch.mm(x, torch.mm(corr.T, torch.mm(corr, corr.T)))
         # cutoff based on class probability distribution
@@ -713,26 +715,42 @@ class CorrelationTracker(object):
             feats = torch.einsum('bc,fhwc->bf',preds, corr)
 
         #print(feats.shape)
+        feats = torch.abs(feats)
         n = x.shape[1]
         top_feats = math.ceil(n*fraction)
-        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        #print(feat_val[:, -1])
-        mask = torch.zeros_like(feats)
-        #counts = torch.histc(feats, bins=100, min=-3.0, max = 3.0)
-        #print('='*80)
-        #print(feat_val[:, -1])
-        #print(counts.long())
-        #print(np.linspace(-3.0, 3.0, 100))
+        #print(top_feats, n, fraction)
+        feat_val, feat_idx = feats.kthvalue(k=top_feats, dim=1, keepdim=True)
+        feat_val = feat_val.repeat([1, feats.shape[1]])
+        mask = (feats >= feat_val)
+        #print((feats >= feat_val).sum().item())
+        #print(feat_val[0, :4])
+        #print(feat_val.shape)
+
+        #feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        ##print(feat_val[:, -1])
+        #mask = torch.zeros_like(feats)
+        ##counts = torch.histc(feats, bins=100, min=-3.0, max = 3.0)
+        ##print('='*80)
+        ##print(feat_val[:, -1])
+        ##print(counts.long())
+        ##print(np.linspace(-3.0, 3.0, 100))
 
 
-        #print(mask.shape, feats.shape, feat_val.shape)
-        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        ##print(mask.shape, feats.shape, feat_val.shape)
+        ##print(feats.min())
+        ##print(feats.shape, feat_val.shape)
+
+        #where = feat_val[:, 0].view(-1, 1).repeat([1, feats.shape[1]])
+        #print(feat_val[:,0])
+        #print(where.shape, feats.shape, top_feats, (feats >= where).sum().item())
+        #mask[feats >= feat_val[:, 0].view(-1, 1).repeat([1, feats.shape[1]])] = 1.0
+        #mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
         #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
+        #print(mask.sum().item(), mask.numel())
         if len(corr.shape) == 2:
-            activation *= activation*mask
+            activation *= mask
         else:
-            activation *= activation*mask.view(mask.shape[0], mask.shape[1], 1, 1)
+            activation *= mask.view(mask.shape[0], mask.shape[1], 1, 1)
 
     def all_class_correlation_selection(self, corr, x, activation, fraction):
         n = x.shape[1]

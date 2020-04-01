@@ -101,10 +101,6 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
             print_and_log('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
-    if tracker is not None:
-        if args.cluster and (epoch-1) % 1 == 0:
-            print('Restructing layers....')
-            tracker.generate_clusters()
             #tracker.make_generalists_clusters()
         #tracker.generate_heatmap('/home/tim/data/plots/corr')
 
@@ -282,8 +278,8 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
-        #tracker = CorrelationTracker(num_labels=10, momentum=0.9, drop_layers=set(['conv1', 'conv2']))
-        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=True)
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9, drop_layers=set(['fc3', 'conv2']))
+        #tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=True)
         tracker.build_graph(model)
         tracker.wrap_model(model)
 
@@ -363,13 +359,23 @@ def main():
 
             train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, tracker)
 
+            #if args.valid_split > 0.0:
+            #    val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
+            #if tracker is not None: tracker.compute_layer_accuracy()
+
+
+            #if tracker is not None:
+                #if args.cluster and (epoch-1) % 3 == 0:
+                    #print('Restructing layers....')
+                    #tracker.generate_clusters()
+
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
+            if tracker is not None: tracker.compute_layer_accuracy()
 
-            if tracker is not None:
-                if epoch > 0:
-                    tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
-                    tracker.compute_layer_accuracy()
+            #if tracker is not None:
+                #tracker.compute_layer_accuracy()
+                    #tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
                     #tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
                     #tracker.generate_clusters()
 
