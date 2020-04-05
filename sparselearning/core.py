@@ -105,16 +105,53 @@ class FairseqLossEngine(AbstractLossEngine):
         self.warmup = 0
         self.n_looked_at = 0
         self.method = method
+        self.sample2loss_history = {}
 
     def loss_func(self, inputs):
         n = inputs['nsentences']
         with torch.no_grad():
             loss, sample_size, logging_output = self.criterion(self.model, inputs, reduce=False)
 
+
         tokens = inputs['net_input']['src_tokens']
-        idx, counts = torch.unique(tokens, return_counts=True)
-        self.freqtbl[idx] += counts
-        self.n += counts.sum().item()
+        #print(inputs['id'])
+        #print(list(inputs.keys()))
+        #print(list(inputs['net_input'].keys()))
+        # use the sum of the tokens as a hash
+        #ids = tokens.sum(1) + (tokens.data*2).sum(1) + (tokens.data*3).sum(1)
+        #ids = inputs['id']
+        #for idx, l in zip(ids, loss.view(tokens.shape[0], -1)):
+        #    idx = idx.item()
+        #    if idx not in self.sample2loss_history: self.sample2loss_history[idx] = []
+        #    self.sample2loss_history[idx].append(l.view(1, -1))
+        #    history = self.sample2loss_history[idx]
+        #    if len(history) == 2:
+        #        history[0] = history[1] - history[0]
+        #    elif len(history) > 2:
+        #        i = len(history)-1
+        #        history[i-1] = history[i-2]*0.5 + (0.5*(history[i] - history[i-1]))
+
+        #loss_data = []
+        #if self.iter % 500 == 0 and self.iter > 0:
+        #    for idx, history in self.sample2loss_history.items():
+        #        if len(history) < 2: continue
+
+        #        #history = torch.cat(history, 0).data
+        #        #diff = history[1:] - history[:-1]
+        #        #diff2 = diff[1:] - diff[:-1]
+        #        #print(history.max(1))
+        #        #print(history.sum(1))
+        #        #print(diff.sum(1))
+        #        #print(diff2.sum(1))
+        #        val, maxidx = history[-1].max(1)
+        #        loss_data.append([idx, val.item(), history[-2][0, maxidx].item(), history[-2].sum().item(), history[-1].sum().item()])
+        #        #print(val.item(), history[-2][0, idx].item(), history[-2].sum().item(), history[-1].sum().item())
+
+        #    loss_data = sorted(loss_data, key=lambda tup: tup[1])
+        #    for tup in loss_data:
+        #        print('{0:>10}: {1:+6.3f} {2:+6.3f} {3:+6.3f} {4:+6.3f}'.format(tup[0], *tup[1:]))
+        #        #for l in history:
+        #            #print(l)
 
         #for l, idx in zip(loss.reshape(n, -1), inputs['net_input']['src_tokens']):
         #    for word_loss, word_idx in zip(l, idx):
@@ -144,21 +181,62 @@ class FairseqLossEngine(AbstractLossEngine):
         #        self.bin_range = None
         #        self.word2losshistory = {}
 
+
+
         rescaled_loss = loss.data.clone()
+        if self.method == 'momentum':
+            ids = inputs['id']
+            return_vals = []
+            for idx, l in zip(ids, loss.view(tokens.shape[0], -1)):
+                idx = idx.item()
+                if idx not in self.sample2loss_history: self.sample2loss_history[idx] = []
+                self.sample2loss_history[idx].append(l.view(1, -1))
+                history = self.sample2loss_history[idx]
+                if len(history) == 2:
+                    history[0] = history[1] - history[0]
+                    return_vals.append(history[0].mean(1))
+                elif len(history) > 2:
+                    i = len(history)-1
+                    history[i-1] = history[i-2]*0.5 + (0.5*(history[i] - history[i-1]))
+                    return_vals.append(history[i-1].mean(1))
+                else:
+                    #return_vals.append(torch.rand(1).to(history[0].device))
+                    return_vals.append(torch.zeros(1).to(history[0].device))
+
+            return torch.cat(return_vals)
+
         if self.method == 'sum':
             return rescaled_loss.reshape(n, -1).sum(1)
         elif self.method == 'max':
             return rescaled_loss.reshape(n, -1).max(1)[0]
+        elif self.method == 'min':
+            return rescaled_loss.reshape(n, -1).min(1)[0]
         elif self.method == 'rescaled_sum':
+            tokens = inputs['net_input']['src_tokens']
+            idx, counts = torch.unique(tokens, return_counts=True)
+            self.freqtbl[idx] += counts
+            self.n += counts.sum().item()
             rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
             return rescaled_loss.reshape(n, -1).sum(1)
         elif self.method == 'inverse_rescaled_sum':
+            tokens = inputs['net_input']['src_tokens']
+            idx, counts = torch.unique(tokens, return_counts=True)
+            self.freqtbl[idx] += counts
+            self.n += counts.sum().item()
             rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
             return rescaled_loss.reshape(n, -1).sum(1)
         elif self.method == 'rescaled_max':
+            tokens = inputs['net_input']['src_tokens']
+            idx, counts = torch.unique(tokens, return_counts=True)
+            self.freqtbl[idx] += counts
+            self.n += counts.sum().item()
             rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
             return rescaled_loss.reshape(n, -1).max(1)[0]
         elif self.method == 'inverse_rescaled_max':
+            tokens = inputs['net_input']['src_tokens']
+            idx, counts = torch.unique(tokens, return_counts=True)
+            self.freqtbl[idx] += counts
+            self.n += counts.sum().item()
             rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
             return rescaled_loss.reshape(n, -1).max(1)[0]
         elif self.method == 'percentile':
@@ -234,7 +312,7 @@ class FairseqLossEngine(AbstractLossEngine):
 
 
 class SelectiveBackpropSampler(object):
-    def __init__(self, loss_engine, beta, seed=0, max_size=1000, epsilon=0.5, decay=0.999):
+    def __init__(self, loss_engine, beta, seed=0, max_size=500, epsilon=0.5, decay=0.999):
         self.beta = beta
         self.history = []
         self.history2 = []
@@ -282,18 +360,19 @@ class SelectiveBackpropSampler(object):
             del self.history2[:]
             self.history2 = []
 
-        if self.iter % self.clean_interval and self.iter > 0:
-            upper = loss.mean() + (loss.std()*3)
-            lower = loss.mean() - (loss.std()*3)
+        #if self.iter % self.clean_interval == 0 and self.iter > 0:
+            #upper = loss.mean() + (loss.std()*3)
+            #lower = loss.mean() - (loss.std()*3)
+            #print(len(self.history2), 'histlen')
 
-            i = 0
-            #print('pre', loss.mean(), torch.cat(self.history2).mean())
-            while i < len(self.history2):
-                m = self.history2[i].mean()
-                if m < lower or m > upper:
-                    self.history2.pop(i)
-                else:
-                    i += 1
+            #i = 0
+            ##print('pre', loss.mean(), torch.cat(self.history2).mean())
+            #while i < len(self.history2):
+            #    m = self.history2[i].mean()
+            #    if m < lower or m > upper:
+            #        self.history2.pop(i)
+            #    else:
+            #        i += 1
             #print('post', loss.mean(), torch.cat(self.history2).mean())
 
         self.history2.append(loss.clone())
