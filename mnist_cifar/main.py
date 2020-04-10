@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import Masking, CosineDecay, LinearDecay, CorrelationTracker
+from sparselearning.core import CorrelationTracker
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -73,7 +73,7 @@ def print_and_log(msg):
     print(msg)
     logger.info(msg)
 
-def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask=None, tracker=None):
+def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, tracker=None):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         if lr_scheduler is not None: lr_scheduler.step()
@@ -94,8 +94,7 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         else:
             loss.backward()
 
-        if mask is not None: mask.step()
-        else: optimizer.step()
+        optimizer.step()
 
         if batch_idx % args.log_interval == 0:
             print_and_log('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -173,6 +172,7 @@ def main():
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
     parser.add_argument('--cluster', action='store_true', help='Clusters the neurons into class groups.')
     parser.add_argument('--wave', action='store_true', help='Trains with lr-wave.')
+    parser.add_argument('--no-batchnorm', action='store_true', help='Remove 2D batchnorm from the network.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -209,44 +209,25 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
-            model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
+            model = cls(*(cls_args + [args.save_features, args.bench, not args.no_batchnorm])).to(device)
             print_and_log(model)
             print_and_log('='*60)
             print_and_log(args.model)
             print_and_log('='*60)
 
-            print_and_log('='*60)
-            print_and_log('Prune mode: {0}'.format(args.prune))
-            print_and_log('Growth mode: {0}'.format(args.growth))
-            print_and_log('Redistribution mode: {0}'.format(args.redistribution))
-            print_and_log('='*60)
-
         # add custom prune/growth/redisribution here
-        if args.prune == 'magnitude_variance':
-            print('Using magnitude-variance pruning. Switching to Adam optimizer...')
-            args.prune = magnitude_variance_pruning
-            args.optimizer = 'adam'
-        if args.redistribution == 'variance':
-            print('Using variance redistribution. Switching to Adam optimizer...')
-            args.redistribution = variance_redistribution
-            args.optimizer = 'adam'
-
         optimizer = None
         if args.optimizer == 'sgd':
-            grps = []
-
-            for i, p in enumerate(model.parameters()):
-                grps.append({'params' : [p], 'lr' : args.lr})
 
             if args.wave:
+                # split into a separate learning rate for each layer if using wave
+                grps = []
+                for i, p in enumerate(model.parameters()):
+                    grps.append({'params' : [p], 'lr' : args.lr})
+
                 optimizer = optim.SGD(grps,lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
             else:
                 optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=True)
-            #optimizer = optim.SGD(grps,lr=0.0,momentum=0.0,weight_decay=0.0, nesterov=False)
-            print('LR', args.lr)
-            #optimizer = optim.SGD(model.parameters(),lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
-        elif args.optimizer == 'adam':
-            optimizer = optim.Adam(model.parameters(),lr=args.lr,weight_decay=args.l2)
         else:
             print('Unknown optimizer: {0}'.format(args.optimizer))
             raise Exception('Unknown optimizer.')
@@ -282,27 +263,37 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
-        #tracker = CorrelationTracker(num_labels=10, momentum=0.9, drop_layers=set(['conv1', 'conv2']))
-        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=True)
+        # How to use correlationtracker
+        # 1. Instantiate class
+        # 2. Build graph and wrap model
+        # 3. use tracker.set_label(labels) before a forward pass
+        # 4. Use tracker.compute_layer_accuracy to get layer-wise accuracies for validation/training 
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=False)
         tracker.build_graph(model)
         tracker.wrap_model(model)
 
-        mask = None
-        if not args.dense:
-            if args.decay_schedule == 'cosine':
-                decay = CosineDecay(args.prune_rate, len(train_loader)*(args.epochs))
-            elif args.decay_schedule == 'linear':
-                decay = LinearDecay(args.prune_rate, len(train_loader)*(args.epochs))
-            mask = Masking(optimizer, decay, prune_rate=args.prune_rate, prune_mode=args.prune, growth_mode=args.growth, redistribution_mode=args.redistribution,
-                           verbose=args.verbose, fp16=args.fp16)
-            mask.add_module(model, density=args.density)
+        # wave learning rate parameters
+        # idx: since we have batch norm after each layer, we need to adjust two layers
+        # lrs: This sets the highest learning rate for the current layers located at the the current idx value.
+        #      The second highest learning rate is applied in a window around the idx-layers.
+        #      The lowest learning rate is applied everywhere else.
+        #      In short: sets learning rates for layers lrs = [everywhere else, window_start/end around the idx values, idx values]
+        # window start is the number of layers with second highest learning rate around the hump (remember we might have batch norm after each layer)
+        # window end: --same--
+        # jump_frequency: The number of epochs after which the learning rate is moved forward
+        # jump: The number of layers one jumps forward the wave after jump_frequency epochs.
+        # Problems: 
+        # - Currently the method jumps every k epochs, but the last layers should be trained for longer
+        # - Another way one could work with this have wrapping learning rates: The wave goes through network, then resets and begins from the start.
+        # - One could also imagine double or continous waves. Multiple waves of learning rates are sent through the network. One could imagine starting
+        #   a new wave every k epochs.
 
-        switches = [1, 4, 7, 10, 15, 20, 25, 30, 35]
-        idx = [0, 1]
+        idx = [0, 1] # if wrapping is implemented this could be used to study the effects of having low learning rates in layers incongruent with the feature wave
         lrs = np.array([0.00001, 0.03, 0.1])
         window_start = 2
         window_end = 2
         jump = 2
+        jump_frequency = 3
         layers = len(optimizer.param_groups)
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
@@ -321,7 +312,7 @@ def main():
                         grp['lr'] = lrs[0]
 
 
-                if (epoch + 1) % 3 == 0:
+                if (epoch + 1) % jump_frequency == 0:
                     idx[0] += jump
                     idx[1] += jump
                     print(len(tracker.layerid2val))
@@ -329,9 +320,12 @@ def main():
                         idx[0] = 0
                         idx[1] = 1
 
-            #optimizer.param_groups[0] = 0.1
-            #optimizer.param_groups[-1] = 0.1
+            # aggressive learning rate decay
+            # this needs to be replaced with a better learning rate schedule
             lrs *= 0.90
+
+            # This code removes gradients from certain weights at certain times
+            # With this you can study what happens if you freeze layers (instead of having a very low learning rate)
             for i, (name, param) in enumerate(model.named_parameters()):
                 pass
                 #name = name.replace('.weight', '')
@@ -361,14 +355,13 @@ def main():
 
 
 
-            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mask, tracker)
+            train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, tracker)
 
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
 
             if tracker is not None:
                 if epoch > 0:
-                    tracker.generate_heatmap('/home/tim/data/plots/corr'.format(args.model))
                     tracker.compute_layer_accuracy()
                     #tracker.network_class_correlation_plot('/home/tim/data/plots/network/')
                     #tracker.generate_clusters()
@@ -377,9 +370,6 @@ def main():
                              'state_dict': model.state_dict(),
                              'optimizer' : optimizer.state_dict()},
                             is_best=False, filename=args.save_model)
-
-            if not args.dense and epoch < args.epochs:
-                mask.at_end_of_epoch()
 
             #tracker.propagate_correlations()
 

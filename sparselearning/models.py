@@ -146,7 +146,7 @@ class AlexNet(nn.Module):
     by Milad Alizadeh.
     """
 
-    def __init__(self, config='s', num_classes=1000, save_features=False, bench_model=False):
+    def __init__(self, config='s', num_classes=1000, save_features=False, bench_model=False, batch_norm=True):
         super(AlexNet, self).__init__()
         self.save_features = save_features
         self.feats = []
@@ -204,7 +204,7 @@ class LeNet_300_100(nn.Module):
     Based on https://github.com/mi-lad/snip/blob/master/train.py
     by Milad Alizadeh.
     """
-    def __init__(self, save_features=None, bench_model=False):
+    def __init__(self, save_features=None, bench_model=False, batch_norm=True):
         super(LeNet_300_100, self).__init__()
         self.fc1 = nn.Linear(28*28, 300, bias=True)
         self.fc2 = nn.Linear(300, 100, bias=True)
@@ -230,7 +230,7 @@ class LeNet_5_Caffe(nn.Module):
     by Milad Alizadeh.
     """
 
-    def __init__(self, save_features=None, bench_model=False):
+    def __init__(self, save_features=None, bench_model=False, batch_norm=True):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 20, 5, padding=0, bias=True)
         self.conv2 = nn.Conv2d(20, 50, 5, bias=True)
@@ -280,10 +280,10 @@ class VGG16(nn.Module):
     by Milad Alizadeh.
     """
 
-    def __init__(self, config, num_classes=10, save_features=False, bench_model=False):
+    def __init__(self, config, num_classes=10, save_features=False, bench_model=False, batch_norm=True):
         super().__init__()
 
-        self.features = self.make_layers(VGG_CONFIGS[config], batch_norm=True)
+        self.features = self.make_layers(VGG_CONFIGS[config], batch_norm=batch_norm)
         self.feats = []
         self.densities = []
         self.save_features = save_features
@@ -322,7 +322,7 @@ class VGG16(nn.Module):
                 if batch_norm:
                     layers += [
                         conv2d,
-                        #nn.BatchNorm2d(v),
+                        nn.BatchNorm2d(v),
                         nn.ReLU(inplace=True)
                     ]
                 else:
@@ -355,7 +355,7 @@ class WideResNet(nn.Module):
     For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
     https://arxiv.org/abs/1605.07146
     """
-    def __init__(self, depth, widen_factor, num_classes=10, dropRate=0.3, save_features=False, bench_model=False):
+    def __init__(self, depth, widen_factor, num_classes=10, dropRate=0.3, save_features=False, bench_model=False, batch_norm=True):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert((depth - 4) % 6 == 0)

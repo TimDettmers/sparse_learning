@@ -43,742 +43,6 @@ class LinearModel(torch.nn.Module):
         return self.fc(x)
 
 
-class CorrelationTracker(object):
-    def __init__(self, num_labels, momentum=0.9, restructure=False, drop_layers=[], freq_perc=90):
-        super(CorrelationTracker, self).__init__()
-        self.drop_layers = drop_layers
-        self.label = None
-        self.num_labels = num_labels
-        self.name2corr = {}
-        self.momentum = momentum
-        self.label_vector = None
-        self.name2train_accs = {}
-        self.name2val_accs = {}
-        self.val_accs_ensemble = []
-        self.name2clusters = {}
-        self.name2prev_clusters = {}
-        self.prev_idx = None
-        self.iter = 0
-        self.name2module = {}
-        self.name2idx = {}
-        self.idx2name = {}
-        self.name2prev_idx = {}
-        self.train_votes = []
-        self.val_votes = []
-        self.lbls = []
-        self.w = torch.nn.Linear(13*10, 10, bias=True).cuda()
-        self.clf = LogisticRegression(solver='sag', multi_class='auto', max_iter=100)
-        self.model = LinearModel().cuda()
-        #self.opt = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
-        self.opt = torch.optim.SGD(self.w.parameters(), lr=0.01, momentum=0.9)
-        self.stable_layer_idx = 0
-        self.layerid2val = {}
-        self.layerid2accs = {}
-        self.name2layerid = {}
-        self.restructure = restructure
-        self.name2freq = {}
-        self.freq_perc = freq_perc
-
-    def track_frequency(self, name, x):
-        # track if a neuron has top percentile activation
-        if name not in self.name2corr: return
-        corr = self.name2corr
-
-        if name not in self.name2freq:
-            self.name2freq[name] = torch.zeros_like(corr).to(corr.device)
-
-        if len(corr.shape) == 2:
-            preds = torch.einsum('bh,hc->bc',x, corr)
-        else:
-            preds = torch.einsum('bfhw,fhwc->bc',x, corr)
-
-        # TODO: Implement frequency counting.
-        #torch.kthvalue(
-
-
-
-
-
-    def wrap_model(self, model):
-        for n, m in model.named_modules():
-            #if isinstance(m, torch.nn.ReLU):
-            #    idx = self.name2idx[n]
-            #    m1 = self.name2module[self.idx2name[idx-1]] if idx-1 > 0 else None
-            #    m2 = self.name2module[self.idx2name[idx-2]] if idx-2 > 0 else None
-            #    if (m1 is not None and isinstance(m1, torch.nn.Conv2d)) or \
-            #       (m2 is not None and isinstance(m2, torch.nn.Conv2d)):
-            #        m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
-
-            if isinstance(m, torch.nn.Conv2d):
-                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
-            elif isinstance(m, torch.nn.Linear):
-                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_ff(name, module, inputs, output))
-            m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
-
-    def network_class_correlation_plot(self, path):
-        if not os.path.exists(path): os.makedirs(path)
-
-        dmax = 0
-        for name, corr in self.name2corr.items():
-            if corr.shape[0] > dmax:
-                dmax = corr.shape[0]
-
-
-        network = np.zeros((dmax, len(self.name2corr)), dtype=np.float32)
-        for cls in range(1):
-            print('Plotting for class {0}...'.format(cls))
-            names = list(self.name2corr.keys())
-            layer_idx = 0
-            print(names)
-            for name1, name2 in zip(names[:-1], names[1:]):
-                corr1 = self.name2corr[name1].clone().mean([1, 2])
-                corr2 = self.name2corr[name2].clone().mean([1, 2])
-                module2 = self.name2module[name2]
-                w = module2.weight.data.sum([2, 3]).permute([1,0])
-                n1 = corr1.shape[0]
-                n2 = corr2.shape[0]
-                #network[:n1, layer_idx] = corr1[:, cls].cpu().numpy()
-                layer_idx += 1
-
-                dmax_local = max(corr1.shape[0], corr2.shape[0])
-                rep = 20
-                l2l = np.zeros((n1+rep, n2+rep), dtype=np.float32)
-                # corr1 [n1, 1]
-                # corr2 [n2, 1]
-                # l2l [n1+1, n2+1]
-                l2l[:-rep, :rep] = corr1[:, cls].unsqueeze(-1).cpu().numpy()
-                l2l[:-rep, rep:] = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(w.cpu().numpy())
-                #l2l[:-rep, rep:] = StandardScaler().fit_transform(w.cpu().numpy())
-                #l2l[:-rep, rep:]/= np.abs(l2l[:-rep, rep:]).max(0)/0.8
-                l2l[-rep:, rep:] = corr2[:, cls].unsqueeze(0).cpu().numpy()
-                fig = sb.heatmap(l2l, vmin=-0.8, vmax=0.8)
-                #print(fig)
-
-                #fig.set_size_inches(18.5, 10.5)
-                plt.savefig(os.path.join(path, '{0}_to_{1}_{2}.png'.format(name1, name2,cls)), dpi=300)
-                plt.close()
-                plt.clf()
-
-            #sb.heatmap(network, vmin=-0.8, vmax=0.8)
-            #plt.savefig(os.path.join(path, '{0}.png'.format(cls)))
-            #plt.clf()
-
-
-
-
-    def propagate_correlations(self):
-        #if len(self.name2prev_clusters) == 0: return
-        names = list(self.name2corr.keys())
-        for name1, name2 in zip(names[:-1], names[1:]):
-            corr1 = self.name2corr[name1]
-            corr2 = self.name2corr[name2]
-            module2 = self.name2module[name2]
-            #clusters1 = self.name2prev_clusters[name1]
-
-            padded_corr1 = corr1.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
-            padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
-
-            with torch.no_grad():
-                prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
-            corr3 = prop_corr.mean([2, 3]).permute([1, 0])
-            print(name2)
-            print('Baseline: ', torch.sqrt((corr2-corr3)**2).mean(0))
-
-            print(module2.weight.shape, corr1.shape, corr2.shape)
-
-            corr4 = module2.weight.unsqueeze(-1)*corr1.view(1, corr1.shape[0], 1, 1, corr1.shape[1])
-            print(corr4.shape)
-            corr4 = corr4.sum([1, 2, 3])
-            print(corr4.shape)
-            print(corr2[:3])
-            print(corr4[:3])
-            print(F.normalize(corr2[:3]))
-            print(F.normalize(corr4[:3]))
-            print('Baseline: ', torch.sqrt((corr2-corr4)**2).mean(0))
-
-            #labels = torch.eye(self.num_labels).to(corr1.device)
-            #labels[labels == 0.0] = -1.0/self.num_labels
-            #feats = torch.mm(labels, torch.mm(corr1.T, torch.mm(corr1, corr1.T)))
-            #feats_sorted = torch.argsort(feats, dim=1, descending=True)
-
-            #for k in range(corr1.shape[0]):
-            #    partial_corr = torch.zeros_like(corr1)
-            #    partial_corr.zero_()
-            #    idx = feats_sorted[:, :k].reshape(-1)
-            #    partial_corr[idx] = corr1[idx]
-
-            #    padded_corr1 = partial_corr.permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
-            #    padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
-
-            #    with torch.no_grad():
-            #        prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
-            #    corr3 = prop_corr.mean([2, 3]).permute([1, 0])
-            #    print('K-features {0}: {1}'.format(k, torch.sqrt((corr2-corr3)**2).mean(0)))
-
-
-
-            #padded_corr2 = corr2.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
-            #padded_corr2 = F.pad(padded_corr2, [1, 1, 1, 1])
-            #with torch.no_grad():
-            #    prop_corr2 = F.conv_transpose2d(padded_corr2, module2.weight, None, module2.stride, module2.padding)
-            #corr4 = prop_corr2.mean([2, 3]).permute([1, 0])
-            #corr1 = self.name2corr[name1]
-            #print(name1, torch.sqrt((corr1-corr4)**2).mean(0))
-
-            print('='*80)
-
-    def build_graph(self, model):
-        i = 0
-        for pname, pmodule in model.named_modules():
-            num_children = len(list(pmodule.named_children()))
-            if num_children > 0:
-                for cname, cmodule in pmodule.named_children():
-                    if pname == '': continue
-
-                    name = '{0}.{1}'.format(pname, cname)
-                    self.name2module[name] = cmodule
-                    self.name2idx[name] = i
-                    self.idx2name[i] = name
-                    i+= 1
-            else:
-                if pname == '': continue
-                name = '{0}'.format(pname)
-                self.name2module[name] = pmodule
-                self.name2idx[name] = i
-                self.idx2name[i] = name
-                i+= 1
-
-        for i in range(len(self.idx2name)):
-            name = self.idx2name[i]
-            module = self.name2module[name]
-
-    def set_label(self, label):
-        # if mini-batch size is different or label not set
-        self.label_vector = label
-        #counts = torch.histc(label, bins=10)
-        #print(counts)
-        if self.label is None or self.label.shape[0] != label.shape[0]:
-            self.label = torch.zeros(label.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)
-            self.label = self.label.to(device=label.device)
-
-        self.label.zero_()
-        self.label.scatter_(1, label.view(-1, 1), 1)
-
-        self.label -= self.label.mean(0)
-        std = self.label.std(0)
-        std[std==0.0] = 1.0
-        self.label /= std
-
-    def generate_heatmap(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        print('Generating heatmaps...')
-        for name, corr in self.name2corr.items():
-            if len(corr.shape) == 4:
-                data = corr.mean([1,2]).cpu().numpy()
-            elif len(corr.shape) == 2:
-                data = corr.cpu().numpy()
-
-            sb.heatmap(data, vmin=-0.8, vmax=0.8)
-            plt.savefig(os.path.join(path, '{0}_{1}.png'.format(name, self.iter)))
-            plt.clf()
-        self.iter += 1
-
-        for name, corr in self.name2corr.items():
-            imgpath = os.path.join(path, '{0}_%d.png'.format(name))
-            movie_path = os.path.join(path, '{0}.mp4'.format(name))
-            os.system("ffmpeg -r 3 -i {0} -vcodec mpeg4 -y {1} -v 0".format(imgpath, movie_path))
-
-    def compute_layer_accuracy(self):
-        print('TRAIN:')
-        print('='*80)
-        for name, acc in self.name2train_accs.items():
-            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
-        print('VALID:')
-        print('='*80)
-        for idx, (name, acc) in enumerate(self.name2val_accs.items()):
-            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
-            if idx not in self.layerid2val: 
-                self.layerid2val[idx] = []
-                self.name2layerid[name] = idx
-            self.layerid2val[idx].append(np.mean(acc))
-
-
-        for idx, accs in self.layerid2val.items():
-            print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
-            if len(accs) < 5: continue
-            if idx > 0:
-                #print(self.stable_layer_idx)
-                if np.std(accs[-5:]) < 0.015 and self.layerid2val[idx-1][-1] < accs[-1] and idx  == self.stable_layer_idx + 1:
-                    self.stable_layer_idx = idx
-                    self.layerid2val = {}
-                    print('Increasing stable layer to: ', self.stable_layer_idx)
-                    print(accs)
-                    break
-            elif self.stable_layer_idx == 0:
-                if np.std(accs[-5:]) < 0.015:
-                    self.stable_layer_idx = 1
-                    self.layerid2val = {}
-                    print('Increasing stable layer to: ', self.stable_layer_idx)
-                    print(accs)
-                    break
-
-
-        if len(self.val_accs_ensemble) > 0:
-            print('ENSEMBLE', np.median(self.val_accs_ensemble), np.mean(self.val_accs_ensemble), self.val_accs_ensemble[-5:])
-
-
-        self.name2train_accs = {}
-        self.name2val_accs = {}
-        self.val_accs_ensemble = []
-
-    def generate_clusters(self):
-        for name, corr in self.name2corr.items():
-            print('Structuring layer: {0}'.format(name))
-            if len(corr.shape) == 4:
-                data = corr.mean([1, 2]).cpu().numpy()
-            elif len(corr.shape) == 2:
-                data = corr.cpu().numpy()
-
-            layer = self.name2module[name]
-            w = layer.weight.data
-            #data = torch.cat([w.view(w.shape[0], -1), corr.view(corr.shape[0], -1)], dim=1).cpu().numpy()
-            #data = w.view(w.shape[0], -1).cpu().numpy()
-            #data = corr.view(corr.shape[0], -1).cpu().numpy()
-            print('Scaling...')
-            #data = StandardScaler().fit_transform(data)
-            data = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(data)
-            print('Fitting k-Means...')
-            clf = KMeans(10, verbose=0, n_jobs=-1, tol=0, n_init=30, max_iter=300)
-            #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
-            #clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
-            #clf = AgglomerativeClustering(n_clusters=None, linkage='complete', affinity='l1', distance_threshold=0.01)
-            #clf = AgglomerativeClustering(self.num_labels, linkage='complete', affinity='l1')
-            #clf = DBSCAN()
-            t0 = time.time()
-            clf = clf.fit(data)
-            clusters = clf.predict(data)
-            #clusters = clf.labels_
-            self.name2clusters[name] = torch.from_numpy(clusters).to(corr.device)
-            #print(clf.cluster_centers_)
-            #labels = torch.eye(self.num_labels).to(corr.device)
-            #labels[labels == 0.0] = -1.0/self.num_labels
-            #clusters = torch.from_numpy(clf.cluster_centers_).to(corr.device)
-
-            # labelxlabel cluster feats -> label x feats
-            #preds = torch.mm(labels, clusters.T)
-            #print(preds.shape)
-            #val, idx = torch.topk(preds, dim=0, k=3, largest=True) # max over label to get the clusters for each label
-            #print('='*80)
-            #print(idx)
-            #print(val)
-
-            #print(np.argmax(cluster2labels))
-
-    def ensemble(self, name):
-        if name == 'features.40' and len(self.val_votes) > 0:
-            # -> bcv
-            votes = torch.cat(self.val_votes, 2)
-            votes = votes.view(votes.shape[0], -1)
-            #out = self.model(votes)
-            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
-            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
-            #votes = self.w(votes)
-
-            vals, idx = torch.topk(out, k=1, dim=1)
-            #vals, idx = torch.mode(idx.squeeze())
-            #idx = self.clf.predict(votes)
-            #idx = torch.from_numpy(idx).to(self.label_vector.device)
-
-            self.val_accs_ensemble.append((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
-            self.val_votes = []
-
-        if name == 'features.40' and len(self.train_votes) > 0:
-            votes = torch.cat(self.train_votes, 2)
-            #vals, idx = torch.topk(votes, k=1, dim=1)
-            #modes, idx = torch.mode(idx.squeeze())
-
-            #vals, m = torch.topk(votes, k=1, dim=1)
-            #vals, modes = torch.topk(votes.mean(2), k=1, dim=1)
-
-            votes = votes.view(votes.shape[0], -1)
-            self.opt.zero_grad()
-            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
-            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
-            #out = self.model(votes)
-            #print(modes[:4])
-            #print(self.label_vector[:4])
-            loss = self.model.loss(out, self.label_vector)
-            loss.backward()
-            self.opt.step()
-
-            #votes = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
-            #print(votes[0], self.label_vector[0])
-            #votes = self.w(votes).squeeze()
-            #print(votes[0], 'vote0')
-            #print(self.label_vector[0], 'lbl0')
-            #vals, idx = torch.topk(out, k=1, dim=1)
-            #print((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
-            #loss = F.nll_loss(F.log_softmax(votes, dim=1), self.label_vector)
-            #loss.backward()
-            #print('pre', self.w.weight.data)
-            #self.opt.step()
-            #print('post', self.w.weight.data)
-            #self.opt.zero_grad()
-            #self.clf.fit(votes, self.label_vector.cpu().numpy())
-
-            self.train_votes = []
-            self.lbls = []
-
-    def predict(self, name, activation, topk=1, is_train=True):
-        corr = self.name2corr[name].clone()
-        #corr[torch.abs(corr) < 0.2] = 0.0
-        #preds = torch.mm(activation, corr)
-        #print(corr.shape, activation.shape)
-        #cov = torch.einsum('fhc,fhc->f',corr, corr)
-        #preds_cov = torch.einsum('bfh,f->bf',activation, cov)
-        #preds = torch.einsum('bf,fhc->bc',preds_cov, corr)
-        #preds = torch.einsum('bfh,fhc->bc',activation, corr)
-        if len(corr.shape) == 2:
-            preds = torch.einsum('bh,hc->bc',activation, corr)
-        else:
-            preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
-        #cov = torch.mm(corr, corr.T)
-        #preds = torch.mm(torch.mm(activation, cov), corr)
-        if is_train:
-            self.train_votes.append(preds.data.unsqueeze(-1))
-        else:
-            self.val_votes.append(preds.data.unsqueeze(-1))
-
-        #self.ensemble(name)
-
-        val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
-        correct = 0
-        for i in range(topk):
-            correct += (self.label_vector == ids[:, i]).sum().item()
-
-        acc = correct/self.label_vector.numel()
-
-        if is_train:
-            if name not in self.name2train_accs: self.name2train_accs[name] = []
-            self.name2train_accs[name].append(acc)
-        else:
-            if name not in self.name2val_accs: self.name2val_accs[name] = []
-            self.name2val_accs[name].append(acc)
-
-        return preds
-        # cutoff based on class probability distribution
-        #return F.normalize(preds)
-
-    def predict_with_features(self, name, activation):
-        full_acc = self.name2train_accs[name][-1]
-        corr = self.name2corr[name].clone()
-        #corr[torch.abs(corr) < 0.2] = 0.0
-        labels = torch.eye(self.num_labels).to(corr.device)
-        labels[labels == 0.0] = -1.0/self.num_labels
-        #labels[labels == 0.0] = -1.0
-        #preds = torch.mm(activation, corr)
-        #feats = torch.mm(preds, corr.T)
-        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
-
-        feats_sorted = torch.argsort(feats, dim=1, descending=True)
-        partial_corr = torch.zeros_like(corr)
-
-        for k in range(activation.shape[1]):
-            partial_corr.zero_()
-            idx = feats_sorted[:, :k].reshape(-1)
-            partial_corr[idx] = corr[idx]
-
-            preds = torch.mm(activation, partial_corr)
-
-            val, ids = torch.topk(preds, k=1, dim=1, largest=True)
-            correct = 0
-            correct += (self.label_vector == ids[:, 0]).sum().item()
-
-            acc = correct/self.label_vector.numel()
-            if k < 16 or k % 16 == 0:
-                print('Acc for {1} features: {0}. Acc ratio: {2}'.format(acc, k, acc/full_acc))
-
-    def make_generalists_clusters(self, num_cluster=10):
-        # pick max 1/importance rank * 1/uncorrelated rank *1/num usage 
-        for name, corr in self.name2corr.items():
-            k = corr.shape[0] // num_cluster
-            print('Finding generalists clustser for layer: {0}'.format(name))
-            # [feat, h, w, class]
-
-            r = corr.clone()
-            r -= r.mean(0)
-            std = r.std(0)
-            std[std==0] = 1.0
-            r /= std
-
-            featR = torch.abs(torch.einsum('fhwc,vhwc->fv', r, r))
-            print(featR[0])
-            #featR *= (torch.eye(r.shape[0]) == 0).float()
-
-            class_contributions = torch.zeros(self.num_labels).to(corr.device)
-            unused = torch.ones(r.shape[0], 1, 1, 1).to(corr.device)
-
-            cluster = torch.ones(corr.shape[0]).to(corr.device)*-1.0
-            cluster_idx = []
-            target_class = 0
-            for i in range(num_cluster):
-                k = (corr.shape[0] - len(cluster_idx)) if i == (num_cluster-1) else k
-                for j in range(k):
-                    #print(class_contributions)
-                    if target_class == self.num_labels: target_class = 0
-                    #print(target_class, class_contributions)
-                    #if len(cluster_idx) > 0:
-                    #    cross_corr = featR[torch.tensor(cluster_idx)].sum(0)
-                    #else:
-                    #    cross_corr = torch.ones(corr.shape[0]).to(corr.device)
-
-                    score = (corr*unused)[:, :, :, target_class].mean([1, 2])
-                    feat_idx = torch.argmax(torch.abs(score))
-                    unused[feat_idx] = 0
-                    #class_contributions += torch.abs(corr[feat_idx].mean([0,1]))
-                    cluster_idx.append(feat_idx)
-                    cluster[feat_idx] = target_class
-                    target_class += 1
-
-            self.name2clusters[name] = cluster
-
-
-    def rearrange(self, name, clusters, module, corr):
-        print('Rearranging neurons...')
-        # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
-        self.name2prev_clusters[name] = clusters
-        if self.prev_idx is not None:
-            if module.weight.data.shape[1] == self.prev_idx.shape[0]:
-                module.weight.data = module.weight.data[:, self.prev_idx]
-        #if len(self.name2clusters) == 0:
-        #    print('end', name)
-        #    self.prev_idx = None
-        #    return
-        n = clusters.numel()
-        idx_map = []
-        val = torch.unique(clusters)
-        for i in range(val.numel()):
-        #for i in range(self.num_labels):
-            lbl_idx = torch.where(clusters==i)[0].view(-1, 1)
-            idx_map.append(lbl_idx)
-
-        idx = torch.cat(idx_map, 0).view(-1)
-
-        self.name2corr[name] = corr[idx]
-        module.weight.data = module.weight.data[idx]
-        if hasattr(module, 'bias') and module.bias is not None:
-            module.bias.data = module.bias.data[idx]
-        self.prev_idx = idx
-        self.name2prev_clusters[name] = idx
-
-    def forward_other(self, name, module, inputs):
-
-        if self.restructure:
-            if name in self.name2clusters:
-                self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
-
-            if self.prev_idx is not None:
-                print(name, 'fixup')
-                if isinstance(module, nn.BatchNorm2d):
-                    if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
-                    if module.weight.shape[0] == self.prev_idx.shape[0]:
-                        module.weight.data = module.weight.data[self.prev_idx]
-                        module.bias.data = module.bias.data[self.prev_idx]
-                        module.running_mean.data = module.running_mean.data[self.prev_idx]
-                        module.running_var.data = module.running_var.data[self.prev_idx]
-                        #self.prev_idx = None
-                        #module.reset_running_stats()
-                elif isinstance(module, nn.Linear):
-                    #if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'linear')
-                    if len(self.name2clusters) == 0:
-                        print(self.prev_idx.shape, module.weight.data.shape, inputs[0].shape, inputs[0].stride())
-                        w = module.weight.data
-                        s1 = w.shape[1]
-                        module.weight.data = (module.weight.data.view(w.shape[0], self.prev_idx.shape[0], -1)[:, self.prev_idx]).view(w.shape)
-                        #module.weight.data = module.weight.data[:, self.prev_idx]
-                        #module.bias.data = module.bias.data[self.prev_idx]
-                        self.prev_idx = None
-                elif isinstance(module, nn.BatchNorm1d):
-                    #module.reset_running_stats()
-                    pass
-        else:
-            if name in self.name2clusters:
-                self.name2prev_clusters[name] = self.name2clusters[name]
-
-    def forward_ff(self, name, module, inputs, activation):
-        x = activation.data.clone()
-
-        x -= x.mean(0)
-        std = x.std(0)
-        std[std==0] = 1.0
-        x /= std
-        if name in self.name2corr:
-            preds = self.predict(name, x, topk=1, is_train=module.training)
-        if module.training:
-            corr = torch.einsum('bh,bc->hc', x, self.label)/x.shape[0]
-            if name not in self.name2corr:
-                self.name2corr[name] = corr
-            else:
-                m = self.name2corr[name]
-                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
-            corr = self.name2corr[name]
-        else:
-            if name in self.name2corr:
-                corr = self.name2corr[name]
-                #self.cluster_drop(name, activation)
-                #self.all_class_correlation_pruning(corr, x, activation, 0.9)
-
-    def forward_conv(self, name, module, inputs, activation):
-        #print((inputs[0] == 0.0).sum().item(), (inputs[0] != 0.0).sum().item(), name)
-
-        x = activation.data.clone()
-        #print(x.shape)
-        #target_elements = 2048
-        #num_ele = np.prod(x.shape[1:])
-        #reduction = int(num_ele/target_elements)
-        #print(reduction)
-        #x = x.view(x.shape[0], x.shape[1], -1)
-        #print(x.shape)
-        #x = torch.chunk(x,reduction, dim=2)
-        #print(x.shape)
-        #x = x.sum(-1)
-        #print(x.shape)
-        #print('=========')
-
-        #x -= x.mean([0, 1])
-        #std = x.std([0, 1])
-        #std[std==0] = 1.0
-        #x /= std
-        #x = x.sum([2])
-
-        #x = x.sum([2, 3])
-
-        x -= x.mean(0)
-        std = x.std(0)
-        std[std==0] = 1.0
-        x /= std
-        if name in self.name2corr:
-            preds = self.predict(name, x, topk=1, is_train=module.training)
-            #self.predict_with_features(name, x)
-        if module.training:
-            #corr = torch.mm(x.T, self.label)/x.shape[0]
-            #corr = torch.einsum('bf,bc->fc', x, self.label)/x.shape[0]
-            #corr = torch.einsum('bfh,bc->fhc', x, self.label)/x.shape[0]
-            corr = torch.einsum('bfhw,bc->fhwc', x, self.label)/x.shape[0]
-            if name not in self.name2corr:
-                self.name2corr[name] = corr
-            else:
-                m = self.name2corr[name]
-                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
-            corr = self.name2corr[name]
-        else:
-            if name in self.name2corr:
-                corr = self.name2corr[name]
-                #self.cluster_drop(name, activation)
-                #self.all_class_correlation_pruning(corr, x, activation, 0.9)
-                #self.cluster_drop(name, activation)
-        #self.max_class_correlation_pruning(preds, corr, activation, 0.2, 3, np.mean(self.name2accs[name]))
-
-    def cluster_drop(self, name, activation, num_layers=100):
-        if len(self.drop_layers) > 0:
-            if not any([name2 in name for name2 in self.drop_layers]): return
-        #names = list(self.name2corr.keys())
-        #names = set(names[-3:])
-        #if name not in names: return
-        k = 2
-        print('Dropping for layer: {0}'.format(name))
-        if name in self.name2prev_clusters:
-            #print('DROPPING {1} CLUSTERS FOR LAYER {0}'.format(name, k))
-            clusters = self.name2prev_clusters[name]
-            for i in range(k):
-                idx = clusters == self.num_labels-(1+i)
-                activation[:, idx] = 0.0
-
-    def all_class_correlation_pruning(self, corr, x, activation, fraction):
-        #preds = torch.mm(torch.mm(x, torch.mm(corr, corr.T)), corr)
-        #preds = torch.mm(x, torch.mm(corr.T, torch.mm(corr, corr.T)))
-        # cutoff based on class probability distribution
-        #normed_preds = F.normalize(preds)
-        #normed_corr = F.normalize(corr.clone())
-        #feats = torch.mm(normed_preds, normed_corr.T)
-        #feats = torch.mm(normed_preds, corr.T)
-        #feats = torch.mm(torch.mm(preds, corr.T), torch.mm(corr, corr.T))
-        if len(corr.shape) == 2:
-            preds = torch.einsum('bh,hc->bc',x, corr)
-            feats = torch.einsum('bc,hc->bh',preds, corr)
-        else:
-            preds = torch.einsum('bfhw,fhwc->bc',x, corr)
-            feats = torch.einsum('bc,fhwc->bf',preds, corr)
-
-        #print(feats.shape)
-        n = x.shape[1]
-        top_feats = math.ceil(n*fraction)
-        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        #print(feat_val[:, -1])
-        mask = torch.zeros_like(feats)
-        #counts = torch.histc(feats, bins=100, min=-3.0, max = 3.0)
-        #print('='*80)
-        #print(feat_val[:, -1])
-        #print(counts.long())
-        #print(np.linspace(-3.0, 3.0, 100))
-
-
-        #print(mask.shape, feats.shape, feat_val.shape)
-        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
-        if len(corr.shape) == 2:
-            activation *= activation*mask
-        else:
-            activation *= activation*mask.view(mask.shape[0], mask.shape[1], 1, 1)
-
-    def all_class_correlation_selection(self, corr, x, activation, fraction):
-        n = x.shape[1]
-        k = math.ceil(n*fraction)#/self.num_labels)
-
-        labels = torch.eye(self.num_labels).to(corr.device)
-        labels[labels == 0.0] = -1.0/self.num_labels
-        #labels[labels == 0.0] = -1.0
-        #preds = torch.mm(activation, corr)
-        #feats = torch.mm(preds, corr.T)
-        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
-
-        feats_sorted = torch.argsort(feats, dim=1, descending=True)
-        partial_corr = torch.zeros_like(corr)
-
-        idx = feats_sorted[:, -k:]
-        idx = idx.reshape(-1).unique()
-        activation[:, idx] = 0.0
-
-
-    def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3, accs=None):
-        top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
-
-        #fraction = 1.0-accs
-        labels = torch.ones(top_preds.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)*-1
-        labels = labels.to(device=top_preds.device)
-
-        labels.scatter_(1, top_preds, 1)
-
-        #print(labels[:3])
-        feats = torch.mm(labels, corr.T)
-        n = activation.shape[1]
-        top_feats = math.ceil(n*fraction)
-        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
-        mask = torch.zeros_like(feats)
-        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
-        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
-        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
-        #feats = (feats > feat_val[:, -1].view(-1, 1)).float().view(feats.shape[0], feats.shape[1], 1, 1)
-        #print((feats==0.0).sum().item(), (feats!=0.0).sum().item(), 'feats')
-        #activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
-        activation*= feats.view(feats.shape[0], feats.shape[1], 1, 1)
-        #activation= activation*feats
-
-
-
 
 
 class CosineDecay(object):
@@ -1287,3 +551,734 @@ class Masking(object):
                     print(name, num_nonzeros)
 
         print('Prune rate: {0}\n'.format(self.prune_rate))
+
+
+
+
+
+class CorrelationTracker(object):
+    def __init__(self, num_labels, momentum=0.9, restructure=False, drop_layers=[], freq_perc=90):
+        super(CorrelationTracker, self).__init__()
+        self.drop_layers = drop_layers
+        self.label = None
+        self.num_labels = num_labels
+        self.name2corr = {}
+        self.momentum = momentum
+        self.label_vector = None
+        self.name2train_accs = {}
+        self.name2val_accs = {}
+        self.val_accs_ensemble = []
+        self.name2clusters = {}
+        self.name2prev_clusters = {}
+        self.prev_idx = None
+        self.iter = 0
+        self.name2module = {}
+        self.name2idx = {}
+        self.idx2name = {}
+        self.name2prev_idx = {}
+        self.train_votes = []
+        self.val_votes = []
+        self.lbls = []
+        self.w = torch.nn.Linear(13*10, 10, bias=True).cuda()
+        self.clf = LogisticRegression(solver='sag', multi_class='auto', max_iter=100)
+        self.model = LinearModel().cuda()
+        #self.opt = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        self.opt = torch.optim.SGD(self.w.parameters(), lr=0.01, momentum=0.9)
+        self.stable_layer_idx = 0
+        self.layerid2val = {}
+        self.layerid2accs = {}
+        self.name2layerid = {}
+        self.restructure = restructure
+        self.name2freq = {}
+        self.freq_perc = freq_perc
+
+    def track_frequency(self, name, x):
+        # track if a neuron has top percentile activation
+        if name not in self.name2corr: return
+        corr = self.name2corr
+
+        if name not in self.name2freq:
+            self.name2freq[name] = torch.zeros_like(corr).to(corr.device)
+
+        if len(corr.shape) == 2:
+            preds = torch.einsum('bh,hc->bc',x, corr)
+        else:
+            preds = torch.einsum('bfhw,fhwc->bc',x, corr)
+
+    def network_class_correlation_plot(self, path):
+        if not os.path.exists(path): os.makedirs(path)
+
+        dmax = 0
+        for name, corr in self.name2corr.items():
+            if corr.shape[0] > dmax:
+                dmax = corr.shape[0]
+
+
+        network = np.zeros((dmax, len(self.name2corr)), dtype=np.float32)
+        for cls in range(1):
+            print('Plotting for class {0}...'.format(cls))
+            names = list(self.name2corr.keys())
+            layer_idx = 0
+            print(names)
+            for name1, name2 in zip(names[:-1], names[1:]):
+                corr1 = self.name2corr[name1].clone().mean([1, 2])
+                corr2 = self.name2corr[name2].clone().mean([1, 2])
+                module2 = self.name2module[name2]
+                w = module2.weight.data.sum([2, 3]).permute([1,0])
+                n1 = corr1.shape[0]
+                n2 = corr2.shape[0]
+                #network[:n1, layer_idx] = corr1[:, cls].cpu().numpy()
+                layer_idx += 1
+
+                dmax_local = max(corr1.shape[0], corr2.shape[0])
+                rep = 20
+                l2l = np.zeros((n1+rep, n2+rep), dtype=np.float32)
+                # corr1 [n1, 1]
+                # corr2 [n2, 1]
+                # l2l [n1+1, n2+1]
+                l2l[:-rep, :rep] = corr1[:, cls].unsqueeze(-1).cpu().numpy()
+                l2l[:-rep, rep:] = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(w.cpu().numpy())
+                #l2l[:-rep, rep:] = StandardScaler().fit_transform(w.cpu().numpy())
+                #l2l[:-rep, rep:]/= np.abs(l2l[:-rep, rep:]).max(0)/0.8
+                l2l[-rep:, rep:] = corr2[:, cls].unsqueeze(0).cpu().numpy()
+                fig = sb.heatmap(l2l, vmin=-0.8, vmax=0.8)
+                #print(fig)
+
+                #fig.set_size_inches(18.5, 10.5)
+                plt.savefig(os.path.join(path, '{0}_to_{1}_{2}.png'.format(name1, name2,cls)), dpi=300)
+                plt.close()
+                plt.clf()
+
+            #sb.heatmap(network, vmin=-0.8, vmax=0.8)
+            #plt.savefig(os.path.join(path, '{0}.png'.format(cls)))
+            #plt.clf()
+
+
+
+
+    def propagate_correlations(self):
+        #if len(self.name2prev_clusters) == 0: return
+        names = list(self.name2corr.keys())
+        for name1, name2 in zip(names[:-1], names[1:]):
+            corr1 = self.name2corr[name1]
+            corr2 = self.name2corr[name2]
+            module2 = self.name2module[name2]
+            #clusters1 = self.name2prev_clusters[name1]
+
+            padded_corr1 = corr1.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
+
+            with torch.no_grad():
+                prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
+            corr3 = prop_corr.mean([2, 3]).permute([1, 0])
+            print(name2)
+            print('Baseline: ', torch.sqrt((corr2-corr3)**2).mean(0))
+
+            print(module2.weight.shape, corr1.shape, corr2.shape)
+
+            corr4 = module2.weight.unsqueeze(-1)*corr1.view(1, corr1.shape[0], 1, 1, corr1.shape[1])
+            print(corr4.shape)
+            corr4 = corr4.sum([1, 2, 3])
+            print(corr4.shape)
+            print(corr2[:3])
+            print(corr4[:3])
+            print(F.normalize(corr2[:3]))
+            print(F.normalize(corr4[:3]))
+            print('Baseline: ', torch.sqrt((corr2-corr4)**2).mean(0))
+
+            #labels = torch.eye(self.num_labels).to(corr1.device)
+            #labels[labels == 0.0] = -1.0/self.num_labels
+            #feats = torch.mm(labels, torch.mm(corr1.T, torch.mm(corr1, corr1.T)))
+            #feats_sorted = torch.argsort(feats, dim=1, descending=True)
+
+            #for k in range(corr1.shape[0]):
+            #    partial_corr = torch.zeros_like(corr1)
+            #    partial_corr.zero_()
+            #    idx = feats_sorted[:, :k].reshape(-1)
+            #    partial_corr[idx] = corr1[idx]
+
+            #    padded_corr1 = partial_corr.permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            #    padded_corr1 = F.pad(padded_corr1, [1, 1, 1, 1])
+
+            #    with torch.no_grad():
+            #        prop_corr = F.conv2d(padded_corr1, module2.weight, module2.bias, module2.stride, module2.padding, module2.dilation)
+            #    corr3 = prop_corr.mean([2, 3]).permute([1, 0])
+            #    print('K-features {0}: {1}'.format(k, torch.sqrt((corr2-corr3)**2).mean(0)))
+
+
+
+            #padded_corr2 = corr2.clone().permute([1, 0]).unsqueeze(-1).unsqueeze(-1)
+            #padded_corr2 = F.pad(padded_corr2, [1, 1, 1, 1])
+            #with torch.no_grad():
+            #    prop_corr2 = F.conv_transpose2d(padded_corr2, module2.weight, None, module2.stride, module2.padding)
+            #corr4 = prop_corr2.mean([2, 3]).permute([1, 0])
+            #corr1 = self.name2corr[name1]
+            #print(name1, torch.sqrt((corr1-corr4)**2).mean(0))
+
+            print('='*80)
+
+
+
+    def generate_heatmap(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        print('Generating heatmaps...')
+        for name, corr in self.name2corr.items():
+            if len(corr.shape) == 4:
+                data = corr.mean([1,2]).cpu().numpy()
+            elif len(corr.shape) == 2:
+                data = corr.cpu().numpy()
+
+            sb.heatmap(data, vmin=-0.8, vmax=0.8)
+            plt.savefig(os.path.join(path, '{0}_{1}.png'.format(name, self.iter)))
+            plt.clf()
+        self.iter += 1
+
+        for name, corr in self.name2corr.items():
+            imgpath = os.path.join(path, '{0}_%d.png'.format(name))
+            movie_path = os.path.join(path, '{0}.mp4'.format(name))
+            os.system("ffmpeg -r 3 -i {0} -vcodec mpeg4 -y {1} -v 0".format(imgpath, movie_path))
+
+    def generate_clusters(self):
+        for name, corr in self.name2corr.items():
+            print('Structuring layer: {0}'.format(name))
+            if len(corr.shape) == 4:
+                data = corr.mean([1, 2]).cpu().numpy()
+            elif len(corr.shape) == 2:
+                data = corr.cpu().numpy()
+
+            layer = self.name2module[name]
+            w = layer.weight.data
+            #data = torch.cat([w.view(w.shape[0], -1), corr.view(corr.shape[0], -1)], dim=1).cpu().numpy()
+            #data = w.view(w.shape[0], -1).cpu().numpy()
+            #data = corr.view(corr.shape[0], -1).cpu().numpy()
+            print('Scaling...')
+            #data = StandardScaler().fit_transform(data)
+            data = MinMaxScaler(feature_range=(-0.8, 0.8)).fit_transform(data)
+            print('Fitting k-Means...')
+            clf = KMeans(10, verbose=0, n_jobs=-1, tol=0, n_init=30, max_iter=300)
+            #clf = KMeans(self.num_labels, verbose=1, n_jobs=-1, tol=1e-06, n_init=30)
+            #clf = GaussianMixture(self.num_labels, verbose=1, tol=1e-06, max_iter=300, n_init=20, )
+            #clf = AgglomerativeClustering(n_clusters=None, linkage='complete', affinity='l1', distance_threshold=0.01)
+            #clf = AgglomerativeClustering(self.num_labels, linkage='complete', affinity='l1')
+            #clf = DBSCAN()
+            t0 = time.time()
+            clf = clf.fit(data)
+            clusters = clf.predict(data)
+            #clusters = clf.labels_
+            self.name2clusters[name] = torch.from_numpy(clusters).to(corr.device)
+            #print(clf.cluster_centers_)
+            #labels = torch.eye(self.num_labels).to(corr.device)
+            #labels[labels == 0.0] = -1.0/self.num_labels
+            #clusters = torch.from_numpy(clf.cluster_centers_).to(corr.device)
+
+            # labelxlabel cluster feats -> label x feats
+            #preds = torch.mm(labels, clusters.T)
+            #print(preds.shape)
+            #val, idx = torch.topk(preds, dim=0, k=3, largest=True) # max over label to get the clusters for each label
+            #print('='*80)
+            #print(idx)
+            #print(val)
+
+            #print(np.argmax(cluster2labels))
+
+    def ensemble(self, name):
+        if name == 'features.40' and len(self.val_votes) > 0:
+            # -> bcv
+            votes = torch.cat(self.val_votes, 2)
+            votes = votes.view(votes.shape[0], -1)
+            #out = self.model(votes)
+            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
+            #votes = self.w(votes)
+
+            vals, idx = torch.topk(out, k=1, dim=1)
+            #vals, idx = torch.mode(idx.squeeze())
+            #idx = self.clf.predict(votes)
+            #idx = torch.from_numpy(idx).to(self.label_vector.device)
+
+            self.val_accs_ensemble.append((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
+            self.val_votes = []
+
+        if name == 'features.40' and len(self.train_votes) > 0:
+            votes = torch.cat(self.train_votes, 2)
+            #vals, idx = torch.topk(votes, k=1, dim=1)
+            #modes, idx = torch.mode(idx.squeeze())
+
+            #vals, m = torch.topk(votes, k=1, dim=1)
+            #vals, modes = torch.topk(votes.mean(2), k=1, dim=1)
+
+            votes = votes.view(votes.shape[0], -1)
+            self.opt.zero_grad()
+            out = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #out = torch.einsum('bcv, hv->bc', votes, F.sigmoid(self.w.weight))
+            #out = self.model(votes)
+            #print(modes[:4])
+            #print(self.label_vector[:4])
+            loss = self.model.loss(out, self.label_vector)
+            loss.backward()
+            self.opt.step()
+
+            #votes = torch.einsum('bf, cf->bc', votes, F.sigmoid(self.w.weight))
+            #print(votes[0], self.label_vector[0])
+            #votes = self.w(votes).squeeze()
+            #print(votes[0], 'vote0')
+            #print(self.label_vector[0], 'lbl0')
+            #vals, idx = torch.topk(out, k=1, dim=1)
+            #print((idx.squeeze()== self.label_vector).sum().item()/self.label_vector.numel())
+            #loss = F.nll_loss(F.log_softmax(votes, dim=1), self.label_vector)
+            #loss.backward()
+            #print('pre', self.w.weight.data)
+            #self.opt.step()
+            #print('post', self.w.weight.data)
+            #self.opt.zero_grad()
+            #self.clf.fit(votes, self.label_vector.cpu().numpy())
+
+            self.train_votes = []
+            self.lbls = []
+
+
+    def predict_with_features(self, name, activation):
+        full_acc = self.name2train_accs[name][-1]
+        corr = self.name2corr[name].clone()
+        #corr[torch.abs(corr) < 0.2] = 0.0
+        labels = torch.eye(self.num_labels).to(corr.device)
+        labels[labels == 0.0] = -1.0/self.num_labels
+        #labels[labels == 0.0] = -1.0
+        #preds = torch.mm(activation, corr)
+        #feats = torch.mm(preds, corr.T)
+        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
+
+        feats_sorted = torch.argsort(feats, dim=1, descending=True)
+        partial_corr = torch.zeros_like(corr)
+
+        for k in range(activation.shape[1]):
+            partial_corr.zero_()
+            idx = feats_sorted[:, :k].reshape(-1)
+            partial_corr[idx] = corr[idx]
+
+            preds = torch.mm(activation, partial_corr)
+
+            val, ids = torch.topk(preds, k=1, dim=1, largest=True)
+            correct = 0
+            correct += (self.label_vector == ids[:, 0]).sum().item()
+
+            acc = correct/self.label_vector.numel()
+            if k < 16 or k % 16 == 0:
+                print('Acc for {1} features: {0}. Acc ratio: {2}'.format(acc, k, acc/full_acc))
+
+    def make_generalists_clusters(self, num_cluster=10):
+        # pick max 1/importance rank * 1/uncorrelated rank *1/num usage 
+        for name, corr in self.name2corr.items():
+            k = corr.shape[0] // num_cluster
+            print('Finding generalists clustser for layer: {0}'.format(name))
+            # [feat, h, w, class]
+
+            r = corr.clone()
+            r -= r.mean(0)
+            std = r.std(0)
+            std[std==0] = 1.0
+            r /= std
+
+            featR = torch.abs(torch.einsum('fhwc,vhwc->fv', r, r))
+            print(featR[0])
+            #featR *= (torch.eye(r.shape[0]) == 0).float()
+
+            class_contributions = torch.zeros(self.num_labels).to(corr.device)
+            unused = torch.ones(r.shape[0], 1, 1, 1).to(corr.device)
+
+            cluster = torch.ones(corr.shape[0]).to(corr.device)*-1.0
+            cluster_idx = []
+            target_class = 0
+            for i in range(num_cluster):
+                k = (corr.shape[0] - len(cluster_idx)) if i == (num_cluster-1) else k
+                for j in range(k):
+                    #print(class_contributions)
+                    if target_class == self.num_labels: target_class = 0
+                    #print(target_class, class_contributions)
+                    #if len(cluster_idx) > 0:
+                    #    cross_corr = featR[torch.tensor(cluster_idx)].sum(0)
+                    #else:
+                    #    cross_corr = torch.ones(corr.shape[0]).to(corr.device)
+
+                    score = (corr*unused)[:, :, :, target_class].mean([1, 2])
+                    feat_idx = torch.argmax(torch.abs(score))
+                    unused[feat_idx] = 0
+                    #class_contributions += torch.abs(corr[feat_idx].mean([0,1]))
+                    cluster_idx.append(feat_idx)
+                    cluster[feat_idx] = target_class
+                    target_class += 1
+
+            self.name2clusters[name] = cluster
+
+
+    def rearrange(self, name, clusters, module, corr):
+        print('Rearranging neurons...')
+        # do not rearrange last layer since the fully connected layer gets confused by the rearrangement
+        self.name2prev_clusters[name] = clusters
+        if self.prev_idx is not None:
+            if module.weight.data.shape[1] == self.prev_idx.shape[0]:
+                module.weight.data = module.weight.data[:, self.prev_idx]
+        #if len(self.name2clusters) == 0:
+        #    print('end', name)
+        #    self.prev_idx = None
+        #    return
+        n = clusters.numel()
+        idx_map = []
+        val = torch.unique(clusters)
+        for i in range(val.numel()):
+        #for i in range(self.num_labels):
+            lbl_idx = torch.where(clusters==i)[0].view(-1, 1)
+            idx_map.append(lbl_idx)
+
+        idx = torch.cat(idx_map, 0).view(-1)
+
+        self.name2corr[name] = corr[idx]
+        module.weight.data = module.weight.data[idx]
+        if hasattr(module, 'bias') and module.bias is not None:
+            module.bias.data = module.bias.data[idx]
+        self.prev_idx = idx
+        self.name2prev_clusters[name] = idx
+
+    def forward_other(self, name, module, inputs):
+
+        if self.restructure:
+            if name in self.name2clusters:
+                self.rearrange(name, self.name2clusters.pop(name), module, self.name2corr[name])
+
+            if self.prev_idx is not None:
+                print(name, 'fixup')
+                if isinstance(module, nn.BatchNorm2d):
+                    if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'norm')
+                    if module.weight.shape[0] == self.prev_idx.shape[0]:
+                        module.weight.data = module.weight.data[self.prev_idx]
+                        module.bias.data = module.bias.data[self.prev_idx]
+                        module.running_mean.data = module.running_mean.data[self.prev_idx]
+                        module.running_var.data = module.running_var.data[self.prev_idx]
+                        #self.prev_idx = None
+                        #module.reset_running_stats()
+                elif isinstance(module, nn.Linear):
+                    #if len(self.name2clusters) == 0: print(self.prev_idx.shape, name, module.weight.shape, 'linear')
+                    if len(self.name2clusters) == 0:
+                        print(self.prev_idx.shape, module.weight.data.shape, inputs[0].shape, inputs[0].stride())
+                        w = module.weight.data
+                        s1 = w.shape[1]
+                        module.weight.data = (module.weight.data.view(w.shape[0], self.prev_idx.shape[0], -1)[:, self.prev_idx]).view(w.shape)
+                        #module.weight.data = module.weight.data[:, self.prev_idx]
+                        #module.bias.data = module.bias.data[self.prev_idx]
+                        self.prev_idx = None
+                elif isinstance(module, nn.BatchNorm1d):
+                    #module.reset_running_stats()
+                    pass
+        else:
+            if name in self.name2clusters:
+                self.name2prev_clusters[name] = self.name2clusters[name]
+
+    def cluster_drop(self, name, activation, num_layers=100):
+        if len(self.drop_layers) > 0:
+            if not any([name2 in name for name2 in self.drop_layers]): return
+        #names = list(self.name2corr.keys())
+        #names = set(names[-3:])
+        #if name not in names: return
+        k = 2
+        print('Dropping for layer: {0}'.format(name))
+        if name in self.name2prev_clusters:
+            #print('DROPPING {1} CLUSTERS FOR LAYER {0}'.format(name, k))
+            clusters = self.name2prev_clusters[name]
+            for i in range(k):
+                idx = clusters == self.num_labels-(1+i)
+                activation[:, idx] = 0.0
+
+    def all_class_correlation_pruning(self, corr, x, activation, fraction):
+        #preds = torch.mm(torch.mm(x, torch.mm(corr, corr.T)), corr)
+        #preds = torch.mm(x, torch.mm(corr.T, torch.mm(corr, corr.T)))
+        # cutoff based on class probability distribution
+        #normed_preds = F.normalize(preds)
+        #normed_corr = F.normalize(corr.clone())
+        #feats = torch.mm(normed_preds, normed_corr.T)
+        #feats = torch.mm(normed_preds, corr.T)
+        #feats = torch.mm(torch.mm(preds, corr.T), torch.mm(corr, corr.T))
+        if len(corr.shape) == 2:
+            preds = torch.einsum('bh,hc->bc',x, corr)
+            feats = torch.einsum('bc,hc->bh',preds, corr)
+        else:
+            preds = torch.einsum('bfhw,fhwc->bc',x, corr)
+            feats = torch.einsum('bc,fhwc->bf',preds, corr)
+
+        #print(feats.shape)
+        n = x.shape[1]
+        top_feats = math.ceil(n*fraction)
+        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        #print(feat_val[:, -1])
+        mask = torch.zeros_like(feats)
+        #counts = torch.histc(feats, bins=100, min=-3.0, max = 3.0)
+        #print('='*80)
+        #print(feat_val[:, -1])
+        #print(counts.long())
+        #print(np.linspace(-3.0, 3.0, 100))
+
+
+        #print(mask.shape, feats.shape, feat_val.shape)
+        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
+        if len(corr.shape) == 2:
+            activation *= activation*mask
+        else:
+            activation *= activation*mask.view(mask.shape[0], mask.shape[1], 1, 1)
+
+    def all_class_correlation_selection(self, corr, x, activation, fraction):
+        n = x.shape[1]
+        k = math.ceil(n*fraction)#/self.num_labels)
+
+        labels = torch.eye(self.num_labels).to(corr.device)
+        labels[labels == 0.0] = -1.0/self.num_labels
+        #labels[labels == 0.0] = -1.0
+        #preds = torch.mm(activation, corr)
+        #feats = torch.mm(preds, corr.T)
+        feats = torch.mm(labels, torch.mm(corr.T, torch.mm(corr, corr.T)))
+
+        feats_sorted = torch.argsort(feats, dim=1, descending=True)
+        partial_corr = torch.zeros_like(corr)
+
+        idx = feats_sorted[:, -k:]
+        idx = idx.reshape(-1).unique()
+        activation[:, idx] = 0.0
+
+
+    def max_class_correlation_pruning(self, preds, corr, activation, fraction, topk=3, accs=None):
+        top_val, top_preds = torch.topk(preds, k=topk, dim=1, largest=True)
+
+        #fraction = 1.0-accs
+        labels = torch.ones(top_preds.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)*-1
+        labels = labels.to(device=top_preds.device)
+
+        labels.scatter_(1, top_preds, 1)
+
+        #print(labels[:3])
+        feats = torch.mm(labels, corr.T)
+        n = activation.shape[1]
+        top_feats = math.ceil(n*fraction)
+        feat_val, feat_idx = torch.topk(feats, k=top_feats, largest=False, dim=1)
+        mask = torch.zeros_like(feats)
+        mask[feats >= feat_val[:, -1].view(-1, 1)] = 1.0
+        mask[feats < feat_val[:, -1].view(-1, 1)] = 0.0
+        #print((mask==0.0).sum().item()/ ((mask==0.0).sum().item() + (mask==1.0).sum().item()))
+        #feats = (feats > feat_val[:, -1].view(-1, 1)).float().view(feats.shape[0], feats.shape[1], 1, 1)
+        #print((feats==0.0).sum().item(), (feats!=0.0).sum().item(), 'feats')
+        #activation.data = activation.data*feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        activation*= feats.view(feats.shape[0], feats.shape[1], 1, 1)
+        #activation= activation*feats
+
+################################################################################
+#                        FEATURE COLLAPSE CODE HERE                            #
+################################################################################
+
+    def set_label(self, label):
+        ''' Sets the labels used for computing the correlation in the forward pass.
+            We scatter into a 1-hot vector and normalize the labels for the correlation calculation.
+        '''
+        # if mini-batch size is different or label not set
+        self.label_vector = label
+        #counts = torch.histc(label, bins=10)
+        #print(counts)
+        if self.label is None or self.label.shape[0] != label.shape[0]:
+            self.label = torch.zeros(label.shape[0], self.num_labels,  dtype=torch.float32, requires_grad=False)
+            self.label = self.label.to(device=label.device)
+
+        # scatter into 1-hot vector
+        self.label.zero_()
+        self.label.scatter_(1, label.view(-1, 1), 1)
+
+        # normalize
+        self.label -= self.label.mean(0)
+        std = self.label.std(0)
+        std[std==0.0] = 1.0 #std 0 can happen for example in mnist in the corners they are always black (0 pixel intensity)
+        self.label /= std
+
+    def build_graph(self, model):
+        ''' builds a graph so that one has a mapping from layers to a linear sequence of indices
+         TODO: Does not work for resnet residual connections?
+        '''
+        i = 0
+        for pname, pmodule in model.named_modules():
+            num_children = len(list(pmodule.named_children()))
+            if num_children > 0:
+                for cname, cmodule in pmodule.named_children():
+                    if pname == '': continue
+
+                    name = '{0}.{1}'.format(pname, cname)
+                    self.name2module[name] = cmodule
+                    self.name2idx[name] = i
+                    self.idx2name[i] = name
+                    i+= 1
+            else:
+                if pname == '': continue
+                name = '{0}'.format(pname)
+                self.name2module[name] = pmodule
+                self.name2idx[name] = i
+                self.idx2name[i] = name
+                i+= 1
+
+        for i in range(len(self.idx2name)):
+            name = self.idx2name[i]
+            module = self.name2module[name]
+
+    def wrap_model(self, model):
+        '''Wraps the model with hooks that track correlation during forward pass.'''
+        for n, m in model.named_modules():
+            # TODO: Track correlations of ReLU instead of conv/linear activations?
+            #if isinstance(m, torch.nn.ReLU):
+            #    idx = self.name2idx[n]
+            #    m1 = self.name2module[self.idx2name[idx-1]] if idx-1 > 0 else None
+            #    m2 = self.name2module[self.idx2name[idx-2]] if idx-2 > 0 else None
+            #    if (m1 is not None and isinstance(m1, torch.nn.Conv2d)) or \
+            #       (m2 is not None and isinstance(m2, torch.nn.Conv2d)):
+            #        m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
+
+            # call the hook before/after the forward pass through the layer
+            if isinstance(m, torch.nn.Conv2d):
+                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_conv(name, module, inputs, output))
+            elif isinstance(m, torch.nn.Linear):
+                m.register_forward_hook(lambda module, inputs, output, name=n: self.forward_ff(name, module, inputs, output))
+            m.register_forward_pre_hook(lambda module, inputs, name=n: self.forward_other(name, module, inputs))
+
+    def forward_ff(self, name, module, inputs, activation):
+        '''Normalizes the clones activation to compute correlations.
+           Correlations are stored in the name2corr dictionary where name is the layer's name.
+        '''
+        x = activation.data.clone()
+
+        x -= x.mean(0)
+        std = x.std(0)
+        std[std==0] = 1.0
+        x /= std
+        if name in self.name2corr:
+            # make prediction based on current correlation
+            preds = self.predict(name, x, topk=1, is_train=module.training)
+        if module.training:
+            # [batch, hidden] [ batch, class] -> hidden,class (feature-class correlations')
+            corr = torch.einsum('bh,bc->hc', x, self.label)/x.shape[0]
+            if name not in self.name2corr:
+                self.name2corr[name] = corr
+            else:
+                m = self.name2corr[name]
+                # we compute a running smoothed mean of feature-class correlations
+                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
+            corr = self.name2corr[name]
+        else:
+            # do not update correlation during evaluation. We do not want to "train" on the validation set.
+            if name in self.name2corr:
+                corr = self.name2corr[name]
+
+    def forward_conv(self, name, module, inputs, activation):
+        '''Normalizes the clones activation to compute correlations.
+           Correlations are stored in the name2corr dictionary where name is the layer's name.
+        '''
+
+        x = activation.data.clone()
+
+        x -= x.mean(0)
+        std = x.std(0)
+        std[std==0] = 1.0
+        x /= std
+        if name in self.name2corr:
+            # make prediction based on current correlation
+            preds = self.predict(name, x, topk=1, is_train=module.training)
+        if module.training:
+            # Change this to compute the correlations over smaller input dimensions
+
+            # channel-label correlations
+            #corr = torch.einsum('bf,bc->fc', x, self.label)/x.shape[0]
+
+            # channel-height-label correlations
+            #corr = torch.einsum('bfh,bc->fhc', x, self.label)/x.shape[0]
+
+            # elementwise-label correlation (consumes more time, but the most accurate)
+            corr = torch.einsum('bfhw,bc->fhwc', x, self.label)/x.shape[0]
+            if name not in self.name2corr:
+                self.name2corr[name] = corr
+            else:
+                m = self.name2corr[name]
+                self.name2corr[name] = m*self.momentum + ((1.0-self.momentum)*corr)
+            corr = self.name2corr[name]
+        else:
+            # do not update correlation during evaluation. We do not want to "train" on the validation set.
+            if name in self.name2corr:
+                corr = self.name2corr[name]
+
+    def predict(self, name, activation, topk=1, is_train=True):
+        ''' Predicts the labels based on cross-correlation between features
+            and the feature-class correlations
+        '''
+        corr = self.name2corr[name].clone()
+
+        # prediction is just the cross-correlation between the correlation matrix and the activations
+        # TODO: Strictly we would need to normalize the correlation matrix first. Since we applied momentum
+        # it does not represent a true centered correlation matrix.
+        if len(corr.shape) == 2:
+            preds = torch.einsum('bh,hc->bc',activation, corr)
+        else:
+            preds = torch.einsum('bfhw,fhwc->bc',activation, corr)
+
+        val, ids = torch.topk(preds, k=topk, dim=1, largest=True)
+        correct = 0
+        for i in range(topk):
+            correct += (self.label_vector == ids[:, i]).sum().item()
+
+        acc = correct/self.label_vector.numel()
+
+        if is_train:
+            if name not in self.name2train_accs: self.name2train_accs[name] = []
+            self.name2train_accs[name].append(acc)
+        else:
+            if name not in self.name2val_accs: self.name2val_accs[name] = []
+            self.name2val_accs[name].append(acc)
+
+        return preds
+
+    def compute_layer_accuracy(self):
+        # computes the accuracy based on the data stored from the predict method
+        # the predict method is called in the forward hook for both training and validation
+        print('TRAIN:')
+        print('='*80)
+        for name, acc in self.name2train_accs.items():
+            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
+        print('VALID:')
+        print('='*80)
+        for idx, (name, acc) in enumerate(self.name2val_accs.items()):
+            print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
+            if idx not in self.layerid2val: 
+                self.layerid2val[idx] = []
+                self.name2layerid[name] = idx
+            self.layerid2val[idx].append(np.mean(acc))
+
+
+        for idx, accs in self.layerid2val.items():
+            print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
+            if len(accs) < 5: continue
+            if idx > 0:
+                #print(self.stable_layer_idx)
+                if np.std(accs[-5:]) < 0.015 and self.layerid2val[idx-1][-1] < accs[-1] and idx  == self.stable_layer_idx + 1:
+                    self.stable_layer_idx = idx
+                    self.layerid2val = {}
+                    print('Increasing stable layer to: ', self.stable_layer_idx)
+                    print(accs)
+                    break
+            elif self.stable_layer_idx == 0:
+                if np.std(accs[-5:]) < 0.015:
+                    self.stable_layer_idx = 1
+                    self.layerid2val = {}
+                    print('Increasing stable layer to: ', self.stable_layer_idx)
+                    print(accs)
+                    break
+
+
+        if len(self.val_accs_ensemble) > 0:
+            print('ENSEMBLE', np.median(self.val_accs_ensemble), np.mean(self.val_accs_ensemble), self.val_accs_ensemble[-5:])
+
+
+        self.name2train_accs = {}
+        self.name2val_accs = {}
+        self.val_accs_ensemble = []
