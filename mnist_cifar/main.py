@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import CorrelationTracker
+from sparselearning.core import CorrelationTracker, Stats
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -173,6 +173,7 @@ def main():
     parser.add_argument('--cluster', action='store_true', help='Clusters the neurons into class groups.')
     parser.add_argument('--wave', action='store_true', help='Trains with lr-wave.')
     parser.add_argument('--no-batchnorm', action='store_true', help='Remove 2D batchnorm from the network.')
+    parser.add_argument('--stats-folder', type=str, default='./', help='The folder where to save the stats.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -268,7 +269,7 @@ def main():
         # 2. Build graph and wrap model
         # 3. use tracker.set_label(labels) before a forward pass
         # 4. Use tracker.compute_layer_accuracy to get layer-wise accuracies for validation/training 
-        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=False)
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=False, stats=Stats(0, 100))
         tracker.build_graph(model)
         tracker.wrap_model(model)
 
@@ -289,15 +290,17 @@ def main():
         #   a new wave every k epochs.
 
         idx = [0, 1] # if wrapping is implemented this could be used to study the effects of having low learning rates in layers incongruent with the feature wave
-        lrs = np.array([0.00001, 0.03, 0.1])
+        lrs = np.array([0.0001, 0.03, 0.1])
         window_start = 2
         window_end = 2
         jump = 2
         jump_frequency = 3
         layers = len(optimizer.param_groups)
+        lr_decay_epochs = int(args.decay_frequency/len(train_loader))
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
             if args.wave:
+                n_grps = len(optimizer.param_groups)
                 for i, grp in enumerate(optimizer.param_groups):
                     if i in idx:
                         grp['lr'] = lrs[2]
@@ -315,14 +318,14 @@ def main():
                 if (epoch + 1) % jump_frequency == 0:
                     idx[0] += jump
                     idx[1] += jump
-                    print(len(tracker.layerid2val))
-                    if idx[1] >= layers:
+                    if idx[1] >= n_grps:
                         idx[0] = 0
                         idx[1] = 1
 
             # aggressive learning rate decay
             # this needs to be replaced with a better learning rate schedule
-            lrs *= 0.90
+            if epoch % lr_decay_epochs == 0:
+                lrs *= 0.1
 
             # This code removes gradients from certain weights at certain times
             # With this you can study what happens if you freeze layers (instead of having a very low learning rate)
@@ -374,6 +377,8 @@ def main():
             #tracker.propagate_correlations()
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
+            if tracker.stats is not None:
+                tracker.stats.save(args.stats_folder)
 
         evaluate(args, model, device, test_loader, is_test_set=True, tracker=tracker)
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))

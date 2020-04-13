@@ -294,9 +294,11 @@ class VGG16(nn.Module):
                 nn.Linear((512 if config == 'D' else 2048), 512),  # 512 * 7 * 7 in the original VGG
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
+                #nn.Dropout(0.3),  
                 nn.Linear(512, 512),
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
+                #nn.Dropout(0.3),  
                 nn.Linear(512, num_classes),
             )
         else:
@@ -304,6 +306,7 @@ class VGG16(nn.Module):
                 nn.Linear(512, 512),  # 512 * 7 * 7 in the original VGG
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
+                #nn.Dropout(0.3),  
                 nn.Linear(512, num_classes),
             )
 
@@ -372,8 +375,10 @@ class WideResNet(nn.Module):
         # 3rd block
         self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, save_features=save_features, bench=self.bench)
         # global average pooling and classifier
-        #self.bn1 = nn.BatchNorm2d(nChannels[3])
-        self.bn1 = lambda x: x
+        if batch_norm:
+            self.bn1 = nn.BatchNorm2d(nChannels[3])
+        else:
+            self.bn1 = lambda x: x
         self.relu = nn.ReLU(inplace=True)
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
@@ -429,16 +434,22 @@ class BasicBlock(nn.Module):
     For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
     https://arxiv.org/abs/1605.07146
     """
-    def __init__(self, in_planes, out_planes, stride, dropRate=0.0, save_features=False, bench=None):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.0, save_features=False, bench=None, batch_norm=True):
         super(BasicBlock, self).__init__()
         self.equalInOut = (in_planes == out_planes)
         self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
                                padding=0, bias=False) or None
-        self.bn1 = nn.BatchNorm2d(in_planes)
+        if batch_norm:
+            self.bn1 = nn.BatchNorm2d(in_planes)
+        else:
+            self.bn1 = lambda x: x
         self.relu1 = nn.ReLU(inplace=True)
         self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                                padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_planes)
+        if batch_norm:
+            self.bn2 = nn.BatchNorm2d(out_planes)
+        else:
+            self.bn2 = lambda x: x
         self.relu2 = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1,
                                padding=1, bias=False)
@@ -486,18 +497,18 @@ class NetworkBlock(nn.Module):
     For more info, see the paper: Wide Residual Networks by Sergey Zagoruyko, Nikos Komodakis
     https://arxiv.org/abs/1605.07146
     """
-    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0, save_features=False, bench=None):
+    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0, save_features=False, bench=None, batch_norm=True):
         super(NetworkBlock, self).__init__()
         self.feats = []
         self.densities = []
         self.save_features = save_features
         self.bench = bench
-        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
+        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate, batch_norm)
 
-    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
+    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate, batch_norm):
         layers = []
         for i in range(int(nb_layers)):
-            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate, save_features=self.save_features, bench=self.bench))
+            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate, save_features=self.save_features, bench=self.bench, batch_norm=batch_norm))
         return nn.Sequential(*layers)
 
     def forward(self, x):

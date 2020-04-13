@@ -10,6 +10,7 @@ from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.linear_model import Ridge, LogisticRegression
+from os.path import join
 
 import numpy as np
 import math
@@ -554,10 +555,31 @@ class Masking(object):
 
 
 
+class Stats(object):
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+        self.step = 0
+        self.accuracy = {'valid' : {}, 'train' : {}, 'idx2name' : {}}
+        self.name2corrs = {}
+        self.name2corrs_temp = {}
+        self.training = True
+        self.name2weights = {}
+
+    def step(self):
+        self.step += 1
+
+    def save(self, path):
+        print('Saving stats...')
+        if not os.path.exists(path): os.mkdir(path)
+        np.save(join(path, 'accuracy.npy'), self.accuracy, allow_pickle=True)
+        np.save(join(path, 'name2corrs.npy'), self.name2corrs, allow_pickle=True)
+        np.save(join(path, 'name2weights.npy'), self.name2weights, allow_pickle=True)
+
 
 
 class CorrelationTracker(object):
-    def __init__(self, num_labels, momentum=0.9, restructure=False, drop_layers=[], freq_perc=90):
+    def __init__(self, num_labels, momentum=0.9, restructure=False, drop_layers=[], freq_perc=90, stats=None):
         super(CorrelationTracker, self).__init__()
         self.drop_layers = drop_layers
         self.label = None
@@ -591,6 +613,7 @@ class CorrelationTracker(object):
         self.restructure = restructure
         self.name2freq = {}
         self.freq_perc = freq_perc
+        self.stats = stats
 
     def track_frequency(self, name, x):
         # track if a neuron has top percentile activation
@@ -1172,6 +1195,26 @@ class CorrelationTracker(object):
             if name in self.name2corr:
                 corr = self.name2corr[name]
 
+
+            if self.stats is not None:
+                if self.stats.training:
+                    if name not in self.name2weights: self.name2weights[name] = []
+                    self.name2weights[name].append(module.weight.cpu().numpy())
+                    if len(self.stats.name2corrs_temp) > 0:
+                        # summarize data from last epoch
+                        for name2, data in self.stats.name2corrs_temp.items():
+                            if name2 not in self.stats.name2corrs:
+                                self.stats.name2corrs[name2] = []
+                            data = np.vstack(data)
+                            data = data.mean(0)
+                            self.stats.name2corrs[name2].append(data)
+
+                    self.stats.name2corrs_temp[name] = []
+                    self.stats.training = False
+                if name not in self.stats.name2corrs_temp: self.stats.name2corrs_temp[name] = []
+                corr = torch.einsum('bh,bc->hc', x, self.label)/(x.shape[0])
+                self.stats.name2corrs_temp[name].append(corr.view(1, corr.shape[0], corr.shape[1]).cpu().numpy())
+
     def forward_conv(self, name, module, inputs, activation):
         '''Normalizes the clones activation to compute correlations.
            Correlations are stored in the name2corr dictionary where name is the layer's name.
@@ -1187,6 +1230,7 @@ class CorrelationTracker(object):
             # make prediction based on current correlation
             preds = self.predict(name, x, topk=1, is_train=module.training)
         if module.training:
+            if self.stats is not None: self.stats.training = True
             # Change this to compute the correlations over smaller input dimensions
 
             # channel-label correlations
@@ -1207,6 +1251,25 @@ class CorrelationTracker(object):
             # do not update correlation during evaluation. We do not want to "train" on the validation set.
             if name in self.name2corr:
                 corr = self.name2corr[name]
+
+            if self.stats is not None:
+                if self.stats.training:
+                    if name not in self.stats.name2weights: self.stats.name2weights[name] = []
+                    self.stats.name2weights[name].append(module.weight.cpu().numpy())
+                    if len(self.stats.name2corrs_temp) > 0:
+                        # summarize data from last epoch
+                        for name2, data in self.stats.name2corrs_temp.items():
+                            if name2 not in self.stats.name2corrs:
+                                self.stats.name2corrs[name2] = []
+                            data = np.vstack(data)
+                            data = data.mean(0)
+                            self.stats.name2corrs[name2].append(data)
+
+                    self.stats.name2corrs_temp[name] = []
+                    self.stats.training = False
+                if name not in self.stats.name2corrs_temp: self.stats.name2corrs_temp[name] = []
+                corr = torch.einsum('bfhw,bc->fc', x, self.label)/(x.shape[0]*x.shape[2]*x.shape[3])
+                self.stats.name2corrs_temp[name].append(corr.view(1, corr.shape[0], corr.shape[1]).cpu().numpy())
 
     def predict(self, name, activation, topk=1, is_train=True):
         ''' Predicts the labels based on cross-correlation between features
@@ -1243,36 +1306,45 @@ class CorrelationTracker(object):
         # the predict method is called in the forward hook for both training and validation
         print('TRAIN:')
         print('='*80)
-        for name, acc in self.name2train_accs.items():
+        for i, (name, acc) in enumerate(self.name2train_accs.items()):
+            if self.stats is not None:
+                if i not in self.stats.accuracy['idx2name']:
+                    self.stats.accuracy['idx2name'][i] = name
+                    self.stats.accuracy['train'][name] = []
+                    self.stats.accuracy['valid'][name] = []
+                self.stats.accuracy['train'][name].append(np.mean(acc))
+
             print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
         print('VALID:')
         print('='*80)
         for idx, (name, acc) in enumerate(self.name2val_accs.items()):
+            if self.stats is not None:
+                self.stats.accuracy['valid'][name].append(np.mean(acc))
             print('{0:30} {1:.2f}'.format(name, np.mean(acc)))
-            if idx not in self.layerid2val: 
+            if idx not in self.layerid2val:
                 self.layerid2val[idx] = []
                 self.name2layerid[name] = idx
             self.layerid2val[idx].append(np.mean(acc))
 
 
-        for idx, accs in self.layerid2val.items():
-            print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
-            if len(accs) < 5: continue
-            if idx > 0:
-                #print(self.stable_layer_idx)
-                if np.std(accs[-5:]) < 0.015 and self.layerid2val[idx-1][-1] < accs[-1] and idx  == self.stable_layer_idx + 1:
-                    self.stable_layer_idx = idx
-                    self.layerid2val = {}
-                    print('Increasing stable layer to: ', self.stable_layer_idx)
-                    print(accs)
-                    break
-            elif self.stable_layer_idx == 0:
-                if np.std(accs[-5:]) < 0.015:
-                    self.stable_layer_idx = 1
-                    self.layerid2val = {}
-                    print('Increasing stable layer to: ', self.stable_layer_idx)
-                    print(accs)
-                    break
+        #for idx, accs in self.layerid2val.items():
+        #    print('{0} {1:.4f} acc {2:.2f}'.format(idx, np.std(accs[-5:]), accs[-1]))
+        #    if len(accs) < 5: continue
+        #    if idx > 0:
+        #        #print(self.stable_layer_idx)
+        #        if np.std(accs[-5:]) < 0.015 and self.layerid2val[idx-1][-1] < accs[-1] and idx  == self.stable_layer_idx + 1:
+        #            self.stable_layer_idx = idx
+        #            self.layerid2val = {}
+        #            print('Increasing stable layer to: ', self.stable_layer_idx)
+        #            print(accs)
+        #            break
+        #    elif self.stable_layer_idx == 0:
+        #        if np.std(accs[-5:]) < 0.015:
+        #            self.stable_layer_idx = 1
+        #            self.layerid2val = {}
+        #            print('Increasing stable layer to: ', self.stable_layer_idx)
+        #            print(accs)
+        #            break
 
 
         if len(self.val_accs_ensemble) > 0:
