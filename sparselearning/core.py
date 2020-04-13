@@ -55,17 +55,62 @@ class AbstractLossEngine(object):
         raise NotImplementedError('Implement make batch function!')
 
 class CVLossEngine(AbstractLossEngine):
-    def __init__(self, model):
+    def __init__(self, model, method='simple', max_history_size=1000, delete=False):
         super(CVLossEngine, self).__init__()
         self.model = model
         self.x = []
         self.y = []
+        self.KL_history = []
+        self.method = method
+        self.max_length = max_history_size
+        self.one_hot_labels = {}
+        self.delete = delete
 
     def loss_func(self, inputs):
         with torch.no_grad():
             x, y = inputs
             output = self.model(x)
-            loss = F.nll_loss(output, y, reduction='none')
+            if self.method == 'simple':
+                loss = F.cross_entropy(output, y, reduction='none')
+            elif self.method == 'KLmin' or self.method == 'KLtopk':
+                if y.shape not in self.one_hot_labels:
+                    self.one_hot_labels[y.shape] = output.new_zeros(output.shape)
+
+                onehot = self.one_hot_labels[y.shape]
+                onehot.zero_()
+                onehot.scatter_(1, y.view(-1, 1), 1)
+
+                #div = F.kl_div(F.log_softmax(output, 1), onehot, reduction='none')
+                #loss = F.cross_entropy(output, y, reduction='none')
+                div = F.normalize(F.softmax(output, 1) - onehot, p=2, dim=1)
+                #div = F.softmax(output, 1) - onehot
+
+                if len(self.KL_history) > self.max_length:
+                    if self.delete:
+                        print('Deleting KL history...')
+                        del self.KL_history[:]
+                    else:
+                        del self.KL_history[:-self.max_length]
+                if len(self.KL_history) == 0:
+                    self.KL_history.append(div)
+                    return output.new_zeros(output.shape[0])
+
+                hist = torch.cat(self.KL_history, 0)
+                #print(hist.shape)
+                losses = []
+                #print(hist.shape, div.shape)
+
+
+                if self.method == 'KLtopk':
+                    dist = 1.0-torch.einsum('hc,bc->hb',hist,div)
+                    val, idx = torch.topk(dist, k=10, dim=0, largest=False)
+                    loss = val.sum(0)
+                elif self.method == 'KLmin':
+                    loss = (1.0-torch.einsum('hc,bc->hb',hist,div)).min(0)[0]
+                else: raise NotImplementedError('This sampling method is not implemented!')
+
+                self.KL_history.append(div)
+
         return loss
 
 
@@ -91,8 +136,9 @@ class CVLossEngine(AbstractLossEngine):
         return [data, target]
 
 class FairseqLossEngine(AbstractLossEngine):
-    def __init__(self, model, criterion, method='sum'):
+    def __init__(self, model, criterion, method='sum', dictionary=None, stats_path=''):
         super(FairseqLossEngine, self).__init__()
+        self.dictionary = dictionary
         self.sampled_data = {}
         self.model = model
         self.criterion = criterion
@@ -101,11 +147,19 @@ class FairseqLossEngine(AbstractLossEngine):
         self.iter = 0
         self.word2losshistory = {}
         self.n = 0
-        self.freqtbl = torch.ones(1000000, dtype=torch.float32, device='cuda')
+        self.freqtbl = torch.ones(1000000 if dictionary is None else len(dictionary), dtype=torch.float32, device='cuda')
         self.warmup = 0
         self.n_looked_at = 0
         self.method = method
         self.sample2loss_history = {}
+        self.gstats = {}
+        self.stats_path = stats_path
+
+    def count_tokens(self, inputs):
+        tokens = inputs['net_input']['src_tokens']
+        idx, counts = torch.unique(tokens, return_counts=True)
+        self.freqtbl[idx] += counts
+        self.n += counts.sum().item()
 
     def loss_func(self, inputs):
         n = inputs['nsentences']
@@ -184,69 +238,73 @@ class FairseqLossEngine(AbstractLossEngine):
 
 
         rescaled_loss = loss.data.clone()
-        if self.method == 'momentum':
+        #rescaled_loss = rescaled_loss.view(-1, n).permute([1, 0])
+        rescaled_loss = rescaled_loss.view(n, -1)
+        if self.method == 'momentum+' or self.method == 'momentum-' or self.method == 'momentum' or self.method == 'momentum-o':
             ids = inputs['id']
             return_vals = []
-            for idx, l in zip(ids, loss.view(tokens.shape[0], -1)):
+            multiplier = -1 if self.method == 'momentum-' else 1
+            for idx, l in zip(ids, rescaled_loss):
                 idx = idx.item()
                 if idx not in self.sample2loss_history: self.sample2loss_history[idx] = []
                 self.sample2loss_history[idx].append(l.view(1, -1))
                 history = self.sample2loss_history[idx]
                 if len(history) == 2:
-                    history[0] = history[1] - history[0]
-                    return_vals.append(history[0].mean(1))
+                    if self.method in ['momentum+', 'momentum-']:
+                        history[0] = history[1] - history[0]
+                    elif self.method == 'momentum':
+                        history[0] = torch.abs(history[1] - history[0])
+                    elif self.method == 'momentum-o':
+                        history[0] = 1.0/(torch.abs(history[1] - history[0])+1e-10)
+
+                    return_vals.append(multiplier*history[0].mean(1))
                 elif len(history) > 2:
                     i = len(history)-1
-                    history[i-1] = history[i-2]*0.5 + (0.5*(history[i] - history[i-1]))
-                    return_vals.append(history[i-1].mean(1))
+                    if self.method in ['momentum+', 'momentum-']:
+                        history[i-1] = history[i-2]*0.5 + (0.5*(history[i] - history[i-1]))
+                    elif self.method == 'momentum':
+                        history[i-1] = history[i-2]*0.5 + (0.5*(torch.abs(history[i] - history[i-1])))
+                    elif self.method == 'momentum-o':
+                        history[i-1] = history[i-2]*0.5 + (0.5*(1.0/(torch.abs(history[i] - history[i-1])+1e-10)))
+
+                    return_vals.append(multiplier*history[i-1].mean(1))
                 else:
                     #return_vals.append(torch.rand(1).to(history[0].device))
                     return_vals.append(torch.zeros(1).to(history[0].device))
 
             return torch.cat(return_vals)
 
-        if self.method == 'sum':
-            return rescaled_loss.reshape(n, -1).sum(1)
+        elif self.method == 'sum':
+            return rescaled_loss.sum(1)
         elif self.method == 'max':
-            return rescaled_loss.reshape(n, -1).max(1)[0]
+            return rescaled_loss.max(1)[0]
         elif self.method == 'min':
-            return rescaled_loss.reshape(n, -1).min(1)[0]
+            return rescaled_loss.min(1)[0]
         elif self.method == 'rescaled_sum':
-            tokens = inputs['net_input']['src_tokens']
-            idx, counts = torch.unique(tokens, return_counts=True)
-            self.freqtbl[idx] += counts
-            self.n += counts.sum().item()
-            rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
+            self.count_tokens(inputs)
+            rescaled_loss = rescaled_loss.reshape(-1)*self.freqtbl[tokens.view(-1)]/self.n
             return rescaled_loss.reshape(n, -1).sum(1)
         elif self.method == 'inverse_rescaled_sum':
-            tokens = inputs['net_input']['src_tokens']
-            idx, counts = torch.unique(tokens, return_counts=True)
-            self.freqtbl[idx] += counts
-            self.n += counts.sum().item()
-            rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
+            self.count_tokens(inputs)
+            rescaled_loss = rescaled_loss.reshape(-1)/(self.freqtbl[tokens.view(-1)]/self.n)
             return rescaled_loss.reshape(n, -1).sum(1)
         elif self.method == 'rescaled_max':
-            tokens = inputs['net_input']['src_tokens']
-            idx, counts = torch.unique(tokens, return_counts=True)
-            self.freqtbl[idx] += counts
-            self.n += counts.sum().item()
-            rescaled_loss = rescaled_loss*self.freqtbl[tokens.view(-1)]/self.n
+            self.count_tokens(inputs)
+            rescaled_loss = rescaled_loss.reshape(-1)*self.freqtbl[tokens.view(-1)]/self.n
             return rescaled_loss.reshape(n, -1).max(1)[0]
         elif self.method == 'inverse_rescaled_max':
-            tokens = inputs['net_input']['src_tokens']
-            idx, counts = torch.unique(tokens, return_counts=True)
-            self.freqtbl[idx] += counts
-            self.n += counts.sum().item()
-            rescaled_loss = rescaled_loss/(self.freqtbl[tokens.view(-1)]/self.n)
+            self.count_tokens(inputs)
+            rescaled_loss = rescaled_loss.reshape(-1)/(self.freqtbl[tokens.view(-1)]/self.n)
             return rescaled_loss.reshape(n, -1).max(1)[0]
         elif self.method == 'percentile':
-            #print(rescaled_loss.data.reshape(n, -1)[0])
             k = int(loss.reshape(n, -1).shape[1]*0.9)
-            return torch.kthvalue(rescaled_loss.reshape(n, -1), k=k, dim=1)[0]
+            return torch.kthvalue(rescaled_loss, k=k, dim=1)[0]
         elif self.method == 'topk_sum':
-            k = int(loss.reshape(n, -1).shape[1]*0.1)
-            maxval, maxidx = torch.topk(rescaled_loss.reshape(n, -1), k=k, dim=0)
+            k = int(rescaled_loss.shape[1]*0.1)
+            maxval, maxidx = torch.topk(rescaled_loss, k=k, dim=1)
             return maxval.sum(1)
+        else:
+            raise NotImplementedError('This sampling function is not implemented.')
 
 
         # get 90th percentile
@@ -308,11 +366,37 @@ class FairseqLossEngine(AbstractLossEngine):
         del self.sampled_data
         self.sampled_data = leftovers
 
+        self.gather_batch_statistics(data)
+
         return data
+
+    def save_stats(self):
+        np.save(self.stats_path, self.gstats, allow_pickle=True)
+
+    def gather_batch_statistics(self, inputs):
+        if self.stats_path == '': return
+        tokens = inputs['net_input']['src_tokens']
+        with torch.no_grad():
+            losses, sample_size, logging_output = self.criterion(self.model, inputs, reduce=False)
+            n = inputs['nsentences']
+            losses = losses.view(n, -1)
+
+            for i, (s1, s2) in enumerate(zip(tokens, losses)):
+                for token, loss in zip(s1, s2):
+                    word = self.dictionary[token.item()]
+                    if word not in self.gstats:
+                        self.gstats[word] = {}
+                        self.gstats[word]['count'] = 0
+                        self.gstats[word]['losses'] = []
+                        self.gstats[word]['ids'] = []
+
+                    self.gstats[word]['count'] += 1
+                    self.gstats[word]['losses'].append(loss.item())
+                    self.gstats[word]['ids'].append(inputs['id'][i].item())
 
 
 class SelectiveBackpropSampler(object):
-    def __init__(self, loss_engine, beta, seed=0, max_size=500, epsilon=0.5, decay=0.999):
+    def __init__(self, loss_engine, beta, seed=0, max_size=500, epsilon=0.5, decay=0.95, delete=False):
         self.beta = beta
         self.history = []
         self.history2 = []
@@ -329,6 +413,7 @@ class SelectiveBackpropSampler(object):
         self.decay = decay
         self.iter = 0
         self.clean_interval = 50
+        self.delete = delete
 
     def generate_sample(self, inputs, idx, batch_size):
         self.batch_size = batch_size
@@ -349,16 +434,25 @@ class SelectiveBackpropSampler(object):
         if self.counts[1] % 100 == 0:
             print('#Forward: {0}; #Backward: {1} Selectivity: {2:.4f}'.format(self.counts[0], self.counts[1], self.counts[1]/self.counts[0]))
             print('Epsilon: {0:.4f}'.format(self.epsilon))
+            if hasattr(self.engine, 'stats_path'):
+                if self.engine.stats_path != '':
+                    print('Saving stats...')
+                    self.engine.save_stats()
 
         return self.engine.make_batch(self.batch_size)
 
 
     def histogram_sample(self, loss, indices):
-        if self.rdm.rand(1) < self.epsilon: return torch.arange(0, loss.shape[0], device=loss.device)
+        if self.rdm.rand(1) < self.epsilon:
+            self.history2.append(loss.clone())
+            return torch.arange(0, loss.shape[0], device=loss.device)
         if len(self.history2) > self.max_size:
-            #self.history2 = self.history2[-self.max_size:]
-            del self.history2[:]
-            self.history2 = []
+            if self.delete:
+                print('Deleting history...')
+                del self.history2[:]
+                self.history2 = []
+            else:
+                self.history2 = self.history2[-self.max_size:]
 
         #if self.iter % self.clean_interval == 0 and self.iter > 0:
             #upper = loss.mean() + (loss.std()*3)
@@ -378,20 +472,19 @@ class SelectiveBackpropSampler(object):
         self.history2.append(loss.clone())
 
         data = torch.cat(self.history2).view(-1, 1).expand(-1, loss.shape[0])
-        m1 = loss.mean()
-        m2 = data.mean()
-        data = data - (m2-m1)
-        #percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
-        #rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
-        percentiles = (loss > data).sum(0).float()/data.shape[0]
+        #std = data.std() + 1e-10
+        #data = data + torch.normal(0, std, size=data.shape, device=data.device)
+        #m1 = loss.mean()
+        #m2 = data.mean()
+        #data = data - (m2-m1)
+
+        percentiles = torch.pow((loss > data).sum(0).float()/data.shape[0], self.beta)
+        rdm = torch.rand(percentiles.shape[0], device=percentiles.device)
+        idx = torch.where(percentiles > rdm)[0]
 
 
-        #print(rdm.device, percentiles.device)
-        #print(1.0-self.beta)
-        #print(percentiles.mean().item())
-        idx = torch.where(percentiles > (1.0 - self.beta))[0]
-
-
+        #percentiles = (loss > data).sum(0).float()/data.shape[0]
+        #idx = torch.where(percentiles > (1.0 - self.beta))[0]
         #print(idx.numel()/ loss.numel(), self.beta)
 
         #print(idx)

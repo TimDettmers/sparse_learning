@@ -243,7 +243,8 @@ class LeNet_5_Caffe(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.fc3(x.view(-1, 50 * 4 * 4)))
-        x = F.log_softmax(self.fc4(x), dim=1)
+        #x = F.log_softmax(self.fc4(x), dim=1)
+        x = self.fc4(x)
 
         return x
 
@@ -345,7 +346,7 @@ class VGG16(nn.Module):
 
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
-        x = F.log_softmax(x, dim=1)
+        #x = F.log_softmax(x, dim=1)
         return x
 
 

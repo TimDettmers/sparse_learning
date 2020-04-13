@@ -87,7 +87,8 @@ def train(args, model, device, train_loader, optimizer, epoch, lr_scheduler, mas
         optimizer.zero_grad()
         output = model(data)
 
-        loss = F.nll_loss(output, target)
+        #loss = F.nll_loss(output, target)
+        loss = F.cross_entropy(output, target)
 
         if args.fp16:
             optimizer.backward(loss)
@@ -113,7 +114,7 @@ def evaluate(args, model, device, test_loader, is_test_set=False):
             if args.fp16: data = data.half()
             model.t = target
             output = model(data)
-            test_loss += F.nll_loss(output, target, reduction='sum').item() # sum up batch loss
+            test_loss += F.cross_entropy(output, target, reduction='sum').item() # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
             n += target.shape[0]
@@ -165,6 +166,13 @@ def main():
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
     parser.add_argument('--beta', type=float, default=0.2)
+    parser.add_argument('--method', type=str, default='simple', help='The loss metric calculation method to use.')
+    parser.add_argument('--sbp', action='store_true', help='Run with selective backprop.')
+    parser.add_argument('--metric-history-size', type=int, default=1000, help='The maximum size of the histroy of statistics to calculate the metric.')
+    parser.add_argument('--history-size', type=int, default=1000, help='The maximum size of the histroy of metrics.')
+    parser.add_argument('--epsilon', type=float, default=0.0, help='The epsilond greedy sampling parameter.')
+    parser.add_argument('--del-history', action='store_true', help='Deletes the history completely if max size is reached.')
+    parser.add_argument('--del-metric-history', action='store_true', help='Deletes the metric-history completely if max size is reached.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -264,16 +272,12 @@ def main():
         #macs, params = profile(model, inputs=(inputs,))
         #macs, params = clever_format([macs, params], "%.3f")
         #print(macs, params)
-        def loss_func(inputs):
-            x, y = inputs
-            output = model(x)
-            loss = F.nll_loss(output, y, reduction='none')
-            return loss
 
-
-        engine = CVLossEngine(model)
-        sampler = SelectiveBackpropSampler(engine, beta=args.beta, max_size=1000)
-        #sampler = None
+        engine = CVLossEngine(model, method=args.method, max_history_size=len(train_loader), delete=args.del_metric_history)
+        if args.sbp:
+            sampler = SelectiveBackpropSampler(engine, beta=args.beta, max_size=args.history_size, epsilon=args.epsilon, delete=args.del_history)
+        else:
+            sampler = None
 
         mask = None
         if not args.dense:
