@@ -15,7 +15,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 
 import sparselearning
-from sparselearning.core import CorrelationTracker, Stats
+from sparselearning.core import CorrelationTracker, Stats, CosineDecay, LinearDecay, StepDecay
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
@@ -35,6 +35,7 @@ models['alexnet-s'] = (AlexNet, ['s', 10])
 models['alexnet-b'] = (AlexNet, ['b', 10])
 models['vgg-c'] = (VGG16, ['C', 10])
 models['vgg-d'] = (VGG16, ['D', 10])
+models['vgg-e'] = (VGG16, ['E', 10])
 models['vgg-like'] = (VGG16, ['like', 10])
 models['wrn-28-2'] = (WideResNet, [28, 2, 10, 0.3])
 models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
@@ -173,7 +174,18 @@ def main():
     parser.add_argument('--cluster', action='store_true', help='Clusters the neurons into class groups.')
     parser.add_argument('--wave', action='store_true', help='Trains with lr-wave.')
     parser.add_argument('--no-batchnorm', action='store_true', help='Remove 2D batchnorm from the network.')
+    parser.add_argument('--stats', action='store_true', help='Enables stats tracking.')
     parser.add_argument('--stats-folder', type=str, default='./', help='The folder where to save the stats.')
+    parser.add_argument('--jump-freq', type=int, default=15, help='The jump frequency of the learning rate wave.')
+    parser.add_argument('--lowlr', type=float, default=0.00001, help='The low learning rate for wave learning rates.')
+    parser.add_argument('--midlr', type=float, default=0.03, help='The mid learning rate for wave learning rates.')
+    parser.add_argument('--highlr', type=float, default=0.1, help='The high learning rate for wave learning rates.')
+    parser.add_argument('--lowmom', type=float, default=0.9, help='The low momentum for wave learning rates.')
+    parser.add_argument('--midmom', type=float, default=0.9, help='The mid momentum for wave learning rates.')
+    parser.add_argument('--highmom', type=float, default=0.9, help='The high momentum for wave learning rates.')
+    parser.add_argument('--lr-schedule', type=str, default='step', help='The learning rate decay schedule: {step, multiplicative, cosine, linear}.')
+    parser.add_argument('--decay-rate', type=float, default=0.1, help='The decay value for the multiplicate learning rate decay schedule.')
+    parser.add_argument('--dropout', type=float, default=0.0, help='Dropout for the network.')
     sparselearning.core.add_sparse_args(parser)
 
     args = parser.parse_args()
@@ -210,7 +222,7 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
-            model = cls(*(cls_args + [args.save_features, args.bench, not args.no_batchnorm])).to(device)
+            model = cls(*(cls_args + [args.save_features, args.bench, not args.no_batchnorm, args.dropout])).to(device)
             print_and_log(model)
             print_and_log('='*60)
             print_and_log(args.model)
@@ -224,7 +236,7 @@ def main():
                 # split into a separate learning rate for each layer if using wave
                 grps = []
                 for i, p in enumerate(model.parameters()):
-                    grps.append({'params' : [p], 'lr' : args.lr})
+                    grps.append({'params' : [p], 'lr' : args.lr, 'momentum' : args.momentum})
 
                 optimizer = optim.SGD(grps,lr=args.lr,momentum=args.momentum,weight_decay=args.l2, nesterov=False)
             else:
@@ -235,6 +247,15 @@ def main():
 
         if args.wave:
             lr_scheduler = None
+            if args.lr_schedule == 'cosine':
+                lr_schedulers = [CosineDecay(args.lowlr, args.epochs), CosineDecay(args.midlr, args.epochs), CosineDecay(args.highlr, args.epochs)]
+            if args.lr_schedule == 'linear':
+                lr_schedulers = [LinearDecay(args.lowlr, args.epochs), LinearDecay(args.midlr, args.epochs), LinearDecay(args.highlr, args.epochs)]
+            elif args.lr_schedule == 'step':
+                lr_decay_epochs = int(args.decay_frequency/len(train_loader))
+                lr_schedulers = [StepDecay(args.lowlr, lr_decay_epochs, args.decay_rate), StepDecay(args.midlr, lr_decay_epochs, args.decay_rate), StepDecay(args.highlr, lr_decay_epochs, args.decay_rate)]
+            elif args.lr_schedule == 'multiplicative':
+                lr_schedulers = [StepDecay(args.lowlr, 1, args.decay_rate), StepDecay(args.midlr, 1, args.decay_rate), StepDecay(args.highlr, 1, args.decay_rate)]
         else:
             lr_scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_frequency, gamma=0.1)
 
@@ -269,7 +290,8 @@ def main():
         # 2. Build graph and wrap model
         # 3. use tracker.set_label(labels) before a forward pass
         # 4. Use tracker.compute_layer_accuracy to get layer-wise accuracies for validation/training 
-        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=False, stats=Stats(0, 100))
+        stats = Stats(0, 100) if args.stats else None
+        tracker = CorrelationTracker(num_labels=10, momentum=0.9, restructure=False, stats=stats)
         tracker.build_graph(model)
         tracker.wrap_model(model)
 
@@ -290,29 +312,41 @@ def main():
         #   a new wave every k epochs.
 
         idx = [0, 1] # if wrapping is implemented this could be used to study the effects of having low learning rates in layers incongruent with the feature wave
-        lrs = np.array([0.0001, 0.03, 0.1])
+        #lrs = np.array([args.lowlr, args.midlr, args.highlr])
+        moms = np.array([args.lowmom, args.midmom, args.highmom])
         window_start = 2
         window_end = 2
         jump = 2
         jump_frequency = 3
         layers = len(optimizer.param_groups)
-        lr_decay_epochs = int(args.decay_frequency/len(train_loader))
+        #lr_decay_epochs = int(args.decay_frequency/len(train_loader))
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
             if args.wave:
+                if epoch > 1:
+                    for sched in lr_schedulers:
+                        sched.step()
                 n_grps = len(optimizer.param_groups)
                 for i, grp in enumerate(optimizer.param_groups):
                     if i in idx:
-                        grp['lr'] = lrs[2]
-                        print(i, grp['lr'])
+                        #grp['lr'] = lrs[2]
+                        grp['lr'] = lr_schedulers[2].get_dr(0)
+                        grp['momentum'] = moms[2]
+                        print(i, grp['lr'], grp['momentum'])
                     elif i < idx[0] and i >= idx[0] - window_start:
-                        grp['lr'] = lrs[1]
-                        print(i, grp['lr'])
+                        #grp['lr'] = lrs[1]
+                        grp['lr'] = lr_schedulers[1].get_dr(0)
+                        grp['momentum'] = moms[1]
+                        print(i, grp['lr'], grp['momentum'])
                     elif i > idx[1] and i <= idx[1] + window_end:
-                        grp['lr'] = lrs[1]
-                        print(i, grp['lr'])
+                        #grp['lr'] = lrs[1]
+                        grp['lr'] = lr_schedulers[1].get_dr(0)
+                        grp['momentum'] = moms[1]
+                        print(i, grp['lr'], grp['momentum'])
                     else:
-                        grp['lr'] = lrs[0]
+                        #grp['lr'] = lrs[0]
+                        grp['lr'] = lr_schedulers[0].get_dr(0)
+                        grp['momentum'] = moms[0]
 
 
                 if (epoch + 1) % jump_frequency == 0:
@@ -321,11 +355,6 @@ def main():
                     if idx[1] >= n_grps:
                         idx[0] = 0
                         idx[1] = 1
-
-            # aggressive learning rate decay
-            # this needs to be replaced with a better learning rate schedule
-            if epoch % lr_decay_epochs == 0:
-                lrs *= 0.1
 
             # This code removes gradients from certain weights at certain times
             # With this you can study what happens if you freeze layers (instead of having a very low learning rate)
@@ -363,6 +392,7 @@ def main():
             if args.valid_split > 0.0:
                 val_acc = evaluate(args, model, device, valid_loader, tracker=tracker)
 
+            print(epoch)
             if tracker is not None:
                 if epoch > 0:
                     tracker.compute_layer_accuracy()
@@ -377,8 +407,9 @@ def main():
             #tracker.propagate_correlations()
 
             print_and_log('Current learning rate: {0}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
-            if tracker.stats is not None:
-                tracker.stats.save(args.stats_folder)
+            if args.stats:
+                if tracker.stats is not None:
+                    tracker.stats.save(args.stats_folder)
 
         evaluate(args, model, device, test_loader, is_test_set=True, tracker=tracker)
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))

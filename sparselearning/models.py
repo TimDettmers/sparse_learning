@@ -257,6 +257,9 @@ VGG_CONFIGS = {
     'D': [
         64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M',
         512, 512, 512, 'M'],
+    'E': [
+        64, 'D', 64, 'M', 128, 'D', 128, 'M', 256, 'D', 256, 256, 'M', 512, 'D', 512, 512, 'M',
+        512, 512, 512, 'M'],
     'C': [
         64, 64, 'M', 128, 128, 'M', 256, 256, (1, 256), 'M', 512, 512, (1, 512), 'M',
         512, 512, (1, 512), 'M' # tuples indicate (kernel size, output channels)
@@ -280,9 +283,10 @@ class VGG16(nn.Module):
     by Milad Alizadeh.
     """
 
-    def __init__(self, config, num_classes=10, save_features=False, bench_model=False, batch_norm=True):
+    def __init__(self, config, num_classes=10, save_features=False, bench_model=False, batch_norm=True, dropout=0.0):
         super().__init__()
 
+        self.dropout = dropout
         self.features = self.make_layers(VGG_CONFIGS[config], batch_norm=batch_norm)
         self.feats = []
         self.densities = []
@@ -294,11 +298,11 @@ class VGG16(nn.Module):
                 nn.Linear((512 if config == 'D' else 2048), 512),  # 512 * 7 * 7 in the original VGG
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
-                #nn.Dropout(0.3),  
+                nn.Dropout(dropout),
                 nn.Linear(512, 512),
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
-                #nn.Dropout(0.3),  
+                nn.Dropout(dropout),
                 nn.Linear(512, num_classes),
             )
         else:
@@ -306,17 +310,18 @@ class VGG16(nn.Module):
                 nn.Linear(512, 512),  # 512 * 7 * 7 in the original VGG
                 nn.ReLU(True),
                 nn.BatchNorm1d(512),  # instead of dropout
-                #nn.Dropout(0.3),  
+                nn.Dropout(dropout),
                 nn.Linear(512, num_classes),
             )
 
-    @staticmethod
-    def make_layers(config, batch_norm=False):
+    def make_layers(self, config, batch_norm=False):
         layers = []
         in_channels = 3
         for v in config:
             if v == 'M':
                 layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            elif v == 'D':
+                layers += [nn.Dropout2d(self.dropout/2.0)]
             else:
                 kernel_size = 3
                 if isinstance(v, tuple):
