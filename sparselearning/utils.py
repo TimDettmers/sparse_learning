@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from torchvision import datasets, transforms
+from sde import truncate_dataset
 
 class DatasetSplitter(torch.utils.data.Dataset):
     """This splitter makes sure that we always use the same training/validation split"""
@@ -24,7 +25,7 @@ class DatasetSplitter(torch.utils.data.Dataset):
         assert index < len(self),"index out of bounds in split_datset"
         return self.parent_dataset[index + self.split_start]
 
-def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
+def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_size=0.05):
     """Creates augmented train, validation, and test data loaders."""
 
     normalize = transforms.Normalize((0.4914, 0.4822, 0.4465),
@@ -49,7 +50,6 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
     full_dataset = datasets.CIFAR10('_dataset', True, train_transform, download=True)
     test_dataset = datasets.CIFAR10('_dataset', False, test_transform, download=False)
 
-
     # we need at least two threads
     max_threads = 2 if max_threads < 2 else max_threads
     if max_threads >= 6:
@@ -63,7 +63,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10):
     valid_loader = None
     if validation_split > 0.0:
         split = int(np.floor((1.0-validation_split) * len(full_dataset)))
-        train_dataset = DatasetSplitter(full_dataset,split_end=split)
+        train_dataset = truncate_dataset(DatasetSplitter(full_dataset,split_end=split), subset_size=subset_size)
         val_dataset = DatasetSplitter(full_dataset,split_start=split)
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
