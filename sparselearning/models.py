@@ -196,7 +196,7 @@ class AlexNet(nn.Module):
 
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
-        return F.log_softmax(x, dim=1)
+        return x
 
 class LeNet_300_100(nn.Module):
     """Simple NN with hidden layers [300, 100]
@@ -216,7 +216,7 @@ class LeNet_300_100(nn.Module):
         x1 = F.relu(self.fc1(x0))
         x2 = F.relu(self.fc2(x1))
         x3 = self.fc3(x2)
-        return F.log_softmax(x3, dim=1)
+        return out
 
 
 
@@ -243,7 +243,7 @@ class LeNet_5_Caffe(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.fc3(x.view(-1, 50 * 4 * 4)))
-        x = F.log_softmax(self.fc4(x), dim=1)
+        x = self.fc4(x)
 
         return x
 
@@ -345,7 +345,6 @@ class VGG16(nn.Module):
 
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
-        x = F.log_softmax(x, dim=1)
         return x
 
 
@@ -420,7 +419,7 @@ class WideResNet(nn.Module):
         out = F.avg_pool2d(out, 8)
         out = out.view(-1, self.nChannels)
         out = self.fc(out)
-        return F.log_softmax(out, dim=1)
+        return out
 
 
 class BasicBlock(nn.Module):

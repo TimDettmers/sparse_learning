@@ -1,35 +1,23 @@
 import os
+import random
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.data import Subset
 
 from torchvision import datasets, transforms
 from sde import truncate_dataset
-
-class DatasetSplitter(torch.utils.data.Dataset):
-    """This splitter makes sure that we always use the same training/validation split"""
-    def __init__(self,parent_dataset,split_start=-1,split_end= -1):
-        split_start = split_start if split_start != -1 else 0
-        split_end = split_end if split_end != -1 else len(parent_dataset)
-        assert split_start <= len(parent_dataset) - 1 and split_end <= len(parent_dataset) and     split_start < split_end , "invalid dataset split"
-
-        self.parent_dataset = parent_dataset
-        self.split_start = split_start
-        self.split_end = split_end
-
-    def __len__(self):
-        return self.split_end - self.split_start
-
-
-    def __getitem__(self,index):
-        assert index < len(self),"index out of bounds in split_datset"
-        return self.parent_dataset[index + self.split_start]
 
 def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_size=0.05):
     """Creates augmented train, validation, and test data loaders."""
 
     normalize = transforms.Normalize((0.4914, 0.4822, 0.4465),
                                      (0.2023, 0.1994, 0.2010))
+
+    torch.random.manual_seed(torch.initial_seed())
+    np.random.seed(torch.initial_seed())
+    random.seed(torch.initial_seed())
+    torch.cuda.manual_seed_all(torch.initial_seed())
 
     train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -61,10 +49,13 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_s
 
 
     valid_loader = None
+    n = len(full_dataset)
     if validation_split > 0.0:
-        split = int(np.floor((1.0-validation_split) * len(full_dataset)))
-        train_dataset = truncate_dataset(DatasetSplitter(full_dataset,split_end=split), subset_size=subset_size)
-        val_dataset = DatasetSplitter(full_dataset,split_start=split)
+        split = int(np.floor((1.0-validation_split) * n))
+        val_idx = range(split, n)
+        train_idx = range(split)
+        val_dataset = Subset(full_dataset, val_idx)
+        train_dataset = Subset(full_dataset, train_idx)
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
@@ -74,7 +65,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_s
             val_dataset,
             args.test_batch_size,
             num_workers=val_threads,
-            pin_memory=True)
+            pin_memory=True, worker_init_fn=random.seed)
     else:
         train_loader = torch.utils.data.DataLoader(
             full_dataset,
@@ -102,15 +93,14 @@ def get_mnist_dataloaders(args, validation_split=0.0):
     full_dataset = datasets.MNIST('../data', train=True, download=True, transform=transform)
     test_dataset = datasets.MNIST('../data', train=False, transform=transform)
 
-    dataset_size = len(full_dataset)
-    indices = list(range(dataset_size))
-    split = int(np.floor(validation_split * dataset_size))
-
     valid_loader = None
+    n = len(full_dataset)
     if validation_split > 0.0:
-        split = int(np.floor((1.0-validation_split) * len(full_dataset)))
-        train_dataset = DatasetSplitter(full_dataset,split_end=split)
-        val_dataset = DatasetSplitter(full_dataset,split_start=split)
+        split = int(np.floor((1.0-validation_split) * n))
+        val_idx = range(split, n)
+        train_idx = range(split)
+        val_dataset = Subset(full_dataset, val_idx)
+        train_dataset = Subset(full_dataset, train_idx)
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,

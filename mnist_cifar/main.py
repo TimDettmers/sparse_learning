@@ -8,6 +8,7 @@ import argparse
 import logging
 import hashlib
 import copy
+import random
 
 import torch
 import torch.nn.functional as F
@@ -22,7 +23,7 @@ from extensions import magnitude_variance_pruning, variance_redistribution
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
 from sparselearning.utils import get_mnist_dataloaders, get_cifar10_dataloaders, plot_class_feature_histograms
 
-cudnn.benchmark = True
+cudnn.benchmark = False
 cudnn.deterministic = True
 
 if not os.path.exists('./models'): os.mkdir('./models')
@@ -37,10 +38,10 @@ models['alexnet-b'] = (AlexNet, ['b', 10])
 models['vgg-c'] = (VGG16, ['C', 10])
 models['vgg-d'] = (VGG16, ['D', 10])
 models['vgg-like'] = (VGG16, ['like', 10])
-models['wrn-28-2'] = (WideResNet, [28, 2, 10, 0.3])
-models['wrn-22-8'] = (WideResNet, [22, 8, 10, 0.3])
-models['wrn-16-8'] = (WideResNet, [16, 8, 10, 0.3])
-models['wrn-16-10'] = (WideResNet, [16, 10, 10, 0.3])
+models['wrn-28-2'] = (WideResNet, [28, 2, 10])
+models['wrn-22-8'] = (WideResNet, [22, 8, 10])
+models['wrn-16-8'] = (WideResNet, [16, 8, 10])
+models['wrn-16-10'] = (WideResNet, [16, 10, 10])
 
 def setup_logger(args):
     global logger
@@ -81,7 +82,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
         optimizer.zero_grad()
         output = model(data)
 
-        loss = F.nll_loss(output, target)
+        loss = F.cross_entropy(output, target)
 
         if args.fp16:
             optimizer.backward(loss)
@@ -95,11 +96,12 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), loss.item()))
 
-def evaluate(args, model, device, test_loader, is_test_set=False, loss=F.nll_loss):
+def evaluate(args, model, device, test_loader, is_test_set=False, loss=F.cross_entropy):
     model.eval()
     test_loss = 0
     correct = 0
     n = 0
+    batches = 0
     hook = LossHook.get_instance()
     with torch.no_grad():
         for data, target in test_loader:
@@ -112,8 +114,9 @@ def evaluate(args, model, device, test_loader, is_test_set=False, loss=F.nll_los
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
             n += target.shape[0]
+            batches += 1
 
-    test_loss /= float(n)
+    test_loss /= float(batches)
 
     print_and_log('\n{}: Average loss: {:.4f}, Accuracy: {}/{} ({:.3f}%)\n'.format(
         'Test evaluation' if is_test_set else 'Evaluation',
@@ -128,11 +131,11 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=100, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=256, metavar='N',
                         help='input batch size for training (default: 100)')
-    parser.add_argument('--test-batch-size', type=int, default=100, metavar='N',
+    parser.add_argument('--test-batch-size', type=int, default=256, metavar='N',
                         help='input batch size for testing (default: 100)')
-    parser.add_argument('--epochs', type=int, default=100, metavar='N',
+    parser.add_argument('--epochs', type=int, default=200, metavar='N',
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 0.1)')
@@ -154,11 +157,13 @@ def main():
     parser.add_argument('--start-epoch', type=int, default=1)
     parser.add_argument('--model', type=str, default='')
     parser.add_argument('--l2', type=float, default=5.0e-4)
+    parser.add_argument('--dropout', type=float, default=0.3)
     parser.add_argument('--iters', type=int, default=1, help='How many times the model should be run after each other. Default=1')
     parser.add_argument('--save-features', action='store_true', help='Resumes a saved model and saves its feature data to disk for plotting.')
     parser.add_argument('--bench', action='store_true', help='Enables the benchmarking of layers and estimates sparse speedups')
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
+    parser.add_argument('--no-write-loss', action='store_true', help='Do not write the loss to the DB.')
     append_global_sde_args(parser)
 
     args = parser.parse_args()
@@ -178,6 +183,7 @@ def main():
     print_and_log('\n\n')
     print_and_log('='*80)
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     for i in range(args.iters):
         print_and_log("\nIteration start: {0}/{1}\n".format(i+1, args.iters))
 
@@ -193,11 +199,10 @@ def main():
             raise Exception('You need to select a model')
         else:
             cls, cls_args = models[args.model]
-            model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
-            print_and_log(model)
-            print_and_log('='*60)
-            print_and_log(args.model)
-            print_and_log('='*60)
+            if args.model.startswith('wrn'):
+                model = cls(*(cls_args + [args.dropout, args.save_features, args.bench])).to(device)
+            else:
+                model = cls(*(cls_args + [args.save_features, args.bench])).to(device)
 
         optimizer = None
         if args.optimizer == 'sgd':
@@ -246,21 +251,23 @@ def main():
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
 
-        hook = LossHook.get_instance()
-        hook.initalize('./loss_data', args, 'cifar-10', args.sde_subset_size, '/home/tim/git/sde/config/args_config.txt')
-        loss_model = LossModel(args, './loss_data', './loss_models', 'cifar-10', from_frac=0.05, to_frac=0.2)
-        if args.sde_train_loss_model:
-            loss_model.load_or_fit()
-        loss = hook.wrap_loss(F.nll_loss)
+        loss = F.cross_entropy
+        if not args.no_write_loss:
+            hook = LossHook.get_instance()
+            hook.initalize('./loss_data', args, args.sde_name, args.sde_subset_size, args.sde_argconfig, ip=args.sde_ip)
+            loss_model = LossModel(args, './loss_data', './loss_models', args.sde_name, from_frac=0.05, to_frac=0.2, ip=args.sde_ip)
+            if args.sde_train_loss_model:
+                loss_model.load_or_fit()
+            loss = hook.wrap_loss(loss)
+
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
             train(args, model, device, train_loader, optimizer, epoch)
             lr_scheduler.step()
 
-            #if args.valid_split > 0.0:
-            #    hook.stage()
-            #    val_acc = evaluate(args, model, device, valid_loader, loss=loss)
-            #    hook.commit()
+            if args.no_write_loss:
+                if args.valid_split > 0.0:
+                    val_acc = evaluate(args, model, device, valid_loader, loss=loss)
 
             save_checkpoint({'epoch': epoch + 1,
                              'state_dict': model.state_dict(),
@@ -269,11 +276,13 @@ def main():
 
             print_and_log('Current learning rate: {0:.4f}. Time taken for epoch: {1:.2f} seconds.\n'.format(optimizer.param_groups[0]['lr'], time.time() - t0))
 
-        hook.stage()
-        evaluate(args, model, device, valid_loader, is_test_set=True, loss=loss)
-        hook.commit()
-        pred = loss_model.predict(hook)
-        print('Predicted loss: {0:.2f}'.format(pred))
+        if not args.no_write_loss:
+            hook.stage()
+            evaluate(args, model, device, valid_loader, is_test_set=True, loss=loss)
+            hook.commit()
+        if loss_model.model is not None:
+            pred = loss_model.predict(hook)
+            print('Predicted loss: {0:.2f}'.format(pred))
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
 
 if __name__ == '__main__':
