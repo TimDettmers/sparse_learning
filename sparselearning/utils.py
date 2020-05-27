@@ -53,9 +53,15 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_s
     if validation_split > 0.0:
         split = int(np.floor((1.0-validation_split) * n))
         val_idx = range(split, n)
-        train_idx = range(split)
+        if subset_size < 1.0:
+            k = int(np.floor(subset_size*split))
+            train_idx = range(k)
+        else:
+            train_idx = range(n)
+
         val_dataset = Subset(full_dataset, val_idx)
         train_dataset = Subset(full_dataset, train_idx)
+
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             args.batch_size,
@@ -80,7 +86,7 @@ def get_cifar10_dataloaders(args, validation_split=0.0, max_threads=10, subset_s
         args.test_batch_size,
         shuffle=False,
         num_workers=1,
-        pin_memory=True)
+        pin_memory=True, worker_init_fn=random.seed)
 
     return train_loader, valid_loader, test_loader
 

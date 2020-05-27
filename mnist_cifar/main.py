@@ -18,6 +18,8 @@ import numpy as np
 from torch import nn
 
 from sde import append_global_sde_args, LossHook, LossModel
+torch.nn.CrossEntropyLoss
+
 
 from extensions import magnitude_variance_pruning, variance_redistribution
 from sparselearning.models import AlexNet, VGG16, LeNet_300_100, LeNet_5_Caffe, WideResNet
@@ -110,6 +112,10 @@ def evaluate(args, model, device, test_loader, is_test_set=False, loss=F.cross_e
             if args.fp16: data = data.half()
             model.t = target
             output = model(data)
+            if args.metric == 'prob':
+                prob = F.softmax(output, -1)
+                p = prob[torch.arange(prob.shape[0]), target]
+                hook.add_metric(p)
             test_loss += loss(output, target).item() # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -164,6 +170,7 @@ def main():
     parser.add_argument('--max-threads', type=int, default=10, help='How many threads to use for data loading.')
     parser.add_argument('--decay-schedule', type=str, default='cosine', help='The decay schedule for the pruning rate. Default: cosine. Choose from: cosine, linear.')
     parser.add_argument('--no-write-loss', action='store_true', help='Do not write the loss to the DB.')
+    parser.add_argument('--metric', type=str, choices=['loss', 'prob'], default='loss', help='The metric to save with the loss hook.')
     append_global_sde_args(parser)
 
     args = parser.parse_args()
@@ -234,14 +241,32 @@ def main():
                 print_and_log("=> no checkpoint found at '{}'".format(args.resume))
         else:
             for name, m in model.named_modules():
-                if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-                    torch.nn.init.xavier_uniform_(m.weight)
+                if isinstance(m, nn.Conv2d):
+                    torch.nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
                     if hasattr(m, 'bias') and m.bias is not None:
                         torch.nn.init.zeros_(m.bias)
-                elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                elif isinstance(m, nn.Linear):
+                    torch.nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+                    if hasattr(m, 'bias') and m.bias is not None:
+                        torch.nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.BatchNorm2d):
+                    m.weight.data.fill_(1)
+                    m.bias.data.zero_()
+                elif isinstance(m, nn.BatchNorm1d):
                     m.weight.data.fill_(1)
                     m.bias.data.zero_()
 
+
+
+        loss = F.cross_entropy
+        if not args.no_write_loss:
+            hook = LossHook.get_instance()
+            hook.initialize('./loss_data', args, model, optimizer, args.sde_name, args.sde_subset_size, args.sde_argconfig, ip=args.sde_ip)
+            #loss_model = LossModel(args, './loss_data', './loss_models', args.sde_name, from_frac=0.05, to_frac=0.2, ip=args.sde_ip)
+            #if args.sde_train_loss_model:
+                #loss_model.load_or_fit()
+            if args.metric == 'loss':
+                loss = hook.wrap_loss(loss)
 
         if args.fp16:
             print('FP16')
@@ -250,15 +275,6 @@ def main():
                                        dynamic_loss_scale = True,
                                        dynamic_loss_args = {'init_scale': 2 ** 16})
             model = model.half()
-
-        loss = F.cross_entropy
-        if not args.no_write_loss:
-            hook = LossHook.get_instance()
-            hook.initalize('./loss_data', args, args.sde_name, args.sde_subset_size, args.sde_argconfig, ip=args.sde_ip)
-            loss_model = LossModel(args, './loss_data', './loss_models', args.sde_name, from_frac=0.05, to_frac=0.2, ip=args.sde_ip)
-            if args.sde_train_loss_model:
-                loss_model.load_or_fit()
-            loss = hook.wrap_loss(loss)
 
         for epoch in range(1, args.epochs + 1):
             t0 = time.time()
@@ -280,9 +296,9 @@ def main():
             hook.stage()
             evaluate(args, model, device, valid_loader, is_test_set=True, loss=loss)
             hook.commit()
-        if loss_model.model is not None:
-            pred = loss_model.predict(hook)
-            print('Predicted loss: {0:.2f}'.format(pred))
+            #if loss_model.model is not None:
+                #pred = loss_model.predict(hook)
+                #print('Predicted loss: {0:.2f}'.format(pred))
         print_and_log("\nIteration end: {0}/{1}\n".format(i+1, args.iters))
 
 if __name__ == '__main__':
