@@ -77,7 +77,10 @@ class Masking(object):
       - `mask.remove_type(type)` removes all layers of a certain type. For example,
         mask.remove_type(torch.nn.BatchNorm2d) removes all 2D batch norm layers.
     """
-    def __init__(self, optimizer, prune_rate_decay, prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum', verbose=False, fp16=False):
+    def __init__(self, optimizer, prune_rate_decay,
+                 prune_rate=0.5, prune_mode='magnitude', growth_mode='momentum', redistribution_mode='momentum',
+                 prune_every_k_steps=0,
+                 verbose=False, fp16=False):
         growth_modes = ['random', 'momentum', 'momentum_neuron']
         if growth_mode not in growth_modes:
             print('Growth mode: {0} not supported!'.format(growth_mode))
@@ -127,7 +130,7 @@ class Masking(object):
         self.growth_increment = 0.2
         self.increment = 0.2
         self.tolerance = 0.02
-        self.prune_every_k_steps = None
+        self.prune_every_k_steps = prune_every_k_steps
         self.half = fp16
         self.name_to_32bit = {}
 
@@ -139,7 +142,6 @@ class Masking(object):
             self.half = True
 
     def init(self, mode='constant', density=0.05):
-        self.sparsity = density
         self.init_growth_prune_and_redist()
         self.init_optimizer()
         if mode == 'constant':
@@ -215,12 +217,14 @@ class Masking(object):
         self.print_nonzero_counts()
 
         total_size = 0
-        for name, module in self.modules[0].named_modules():
-            if hasattr(module, 'weight'):
-                total_size += module.weight.numel()
-            if hasattr(module, 'bias'):
-                if module.bias is not None:
-                    total_size += module.bias.numel()
+        # for name, module in self.modules[0].named_modules():
+        #     if hasattr(module, 'weight'):
+        #         total_size += module.weight.numel()
+        #     if hasattr(module, 'bias'):
+        #         if module.bias is not None:
+        #             total_size += module.bias.numel()
+        for p, tensor in self.modules[0].named_parameters():
+            total_size += tensor.numel()
         print('Total Model parameters:', total_size)
 
         total_size = 0
@@ -278,13 +282,13 @@ class Masking(object):
 
         self.steps += 1
 
-        if self.prune_every_k_steps is not None:
+        if self.prune_every_k_steps:
             if self.steps % self.prune_every_k_steps == 0:
                 self.truncate_weights()
                 if self.verbose:
                     self.print_nonzero_counts()
 
-    def add_module(self, module, density, sparse_init='constant'):
+    def add_module(self, module, density, sparse_init='constant', remove_param_names=()):
         self.modules.append(module)
         for name, tensor in module.named_parameters():
             self.names.append(name)
@@ -295,6 +299,9 @@ class Masking(object):
         self.remove_type(nn.BatchNorm2d, verbose=self.verbose)
         print('Removing 1D batch norms...')
         self.remove_type(nn.BatchNorm1d, verbose=self.verbose)
+        for param_name in remove_param_names:
+            print(f'Removing params containing {param_name}...')
+            self.remove_weight_partial_name(param_name)
         self.init(mode=sparse_init, density=density)
 
     def is_at_start_of_pruning(self, name):
